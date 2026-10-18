@@ -108,14 +108,36 @@ class MetricsSummary:
     csv_path: str = ""
     host: dict[str, str] = field(default_factory=dict)
 
+    MIN_SLOPE_DURATION_S = 300.0
+    """Duración mínima para que la pendiente de memoria signifique algo.
+
+    La pendiente se ajusta por mínimos cuadrados y luego se extrapola a un
+    minuto. Desde una ventana de 45 s, esa extrapolación amplifica el ruido de
+    medición hasta hacerla inútil: se midió +0,36, +0,69, +1,17 y +1,90 MB/min
+    en ejecuciones consecutivas de la MISMA configuración, lo que significa que
+    el método no resuelve el umbral de 1 MB/min en ventanas cortas.
+
+    Declararlo «no concluyente» es más honesto que dar un veredicto que cambia
+    de signo entre repeticiones. Lo que decide CA-08 es la prueba de 30 min.
+    """
+
+    @property
+    def memory_verdict(self) -> str:
+        """'estable' | 'crecimiento' | 'no concluyente'."""
+        if self.duration_s < self.MIN_SLOPE_DURATION_S:
+            return "no concluyente"
+        return "estable" if self.rss_slope_mb_per_min < 1.0 else "crecimiento"
+
     @property
     def memory_stable(self) -> bool:
         """CA-08: sin crecimiento sostenido de memoria.
 
         Se tolera 1 MB/min, que cubre el ruido de la fragmentación del
-        asignador y del recolector de basura de Python.
+        asignador y del recolector de basura de Python. En ventanas cortas
+        devuelve True porque no hay evidencia de lo contrario; usa
+        `memory_verdict` para distinguir «estable» de «no concluyente».
         """
-        return self.rss_slope_mb_per_min < 1.0
+        return self.memory_verdict != "crecimiento"
 
     def render(self) -> str:
         lines = [
@@ -126,7 +148,13 @@ class MetricsSummary:
             f"Memoria (RSS)           inicio {self.rss_start_mb:.0f} MB  fin {self.rss_end_mb:.0f} MB  "
             f"max {self.rss_max_mb:.0f} MB",
             f"Deriva de memoria       {self.rss_slope_mb_per_min:+.2f} MB/min  "
-            f"-> {'estable' if self.memory_stable else 'CRECIMIENTO SOSTENIDO'}",
+            f"-> {self.memory_verdict.upper()}"
+            + (
+                f"  (hacen falta {self.MIN_SLOPE_DURATION_S / 60:.0f} min "
+                "para que la pendiente sea fiable)"
+                if self.memory_verdict == "no concluyente"
+                else ""
+            ),
             f"FPS efectivos           media {self.fps_mean:.2f}  mínimo {self.fps_min:.2f}",
             f"Coste por fotograma     p95 {self.frame_ms_p95:.2f} ms  max {self.frame_ms_max:.2f} ms",
             f"Fotogramas emitidos     {self.frames_sent}  (tardíos {self.late_frames}, resincronizaciones {self.resyncs})",

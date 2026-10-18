@@ -289,8 +289,27 @@ def test_la_pendiente_de_memoria_detecta_una_fuga():
 
 
 def test_el_resumen_juzga_la_estabilidad_de_memoria():
-    assert MetricsSummary(rss_slope_mb_per_min=0.2).memory_stable
-    assert not MetricsSummary(rss_slope_mb_per_min=4.0).memory_stable
+    largo = MetricsSummary.MIN_SLOPE_DURATION_S + 60
+    assert MetricsSummary(duration_s=largo, rss_slope_mb_per_min=0.2).memory_stable
+    assert not MetricsSummary(duration_s=largo, rss_slope_mb_per_min=4.0).memory_stable
+
+
+def test_una_ventana_corta_no_juzga_la_memoria():
+    """Medido en este equipo: la misma configuracion dio +0,36, +0,69, +1,17 y
+    +1,90 MB/min en ejecuciones de 45-90 s. El metodo no resuelve el umbral de
+    1 MB/min en ventanas cortas, asi que no debe dar un veredicto."""
+    corto = MetricsSummary(duration_s=45.0, rss_slope_mb_per_min=1.9)
+    assert corto.memory_verdict == "no concluyente"
+    assert corto.memory_stable, "no hay evidencia de fuga: no debe fallar"
+    informe = corto.render().lower()
+    assert "no concluyente" in informe
+    assert "min" in informe, "debe decir cuánto hace falta medir"
+
+
+def test_una_ventana_larga_si_juzga():
+    largo = MetricsSummary(duration_s=1800.0, rss_slope_mb_per_min=3.0)
+    assert largo.memory_verdict == "crecimiento"
+    assert not largo.memory_stable
 
 
 def test_el_resumen_se_puede_imprimir():

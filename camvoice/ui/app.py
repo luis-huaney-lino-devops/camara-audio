@@ -8,11 +8,14 @@ Reglas de la ventana:
   salida.
 * La preparación de clips (lo único que tarda) corre en un hilo aparte con
   barra de progreso: la ventana sigue respondiendo.
-* Los controles se separan en dos clases. Los que se aplican en caliente
-  (sensibilidad, tiempos, velocidades, transición, cámara virtual) quedan
-  activos mientras la sesión corre. Los que invalidan la caché de fotogramas
-  (clips, resolución, FPS, encuadre, espejo) se bloquean con una explicación,
-  en vez de fingir que surten efecto.
+* Los controles se separan en dos clases. Los que se aplican **en caliente**
+  (sensibilidad, tiempos, velocidades, transición, todos los efectos, cámara
+  virtual) quedan activos mientras la sesión corre. Los que invalidan la caché
+  de fotogramas (clips, resolución, FPS, encuadre) se bloquean con una
+  explicación, en vez de fingir que surten efecto.
+
+La configuración va en pestañas: el panel único obligaba a desplazarse para
+llegar a lo de abajo, y con los efectos añadidos no cabría.
 """
 
 from __future__ import annotations
@@ -26,11 +29,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -39,31 +39,59 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
-    QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ..audio.capture import AudioError, DeviceInfo, list_input_devices
-from ..config import AppConfig
+from ..config import AppConfig, EffectsConfig
 from ..controller import Session, SessionError
 from ..video.cache import ClipCacheError, probe_clip
+from .widgets import (
+    STYLESHEET,
+    Card,
+    PercentSlider,
+    combo,
+    labelled_row,
+    spin_double,
+    state_badge_style,
+)
 
 VIDEO_FILTER = "Videos (*.mp4 *.mov *.avi *.mkv *.webm *.m4v);;Todos los archivos (*.*)"
 
-STATE_STYLES = {
-    "SILENT": ("Silencio", "#2d3b4a", "#9fb4c7"),
-    "SPEAKING": ("Voz detectada", "#1f4d2b", "#7fe0a0"),
-    "TRANSITION": ("Transición", "#4d3f1f", "#e8c97f"),
-}
-
 RESOLUTIONS = [
-    ("640 x 480  (4:3, recomendada)", 640, 480),
-    ("848 x 480  (16:9)", 848, 480),
-    ("960 x 720  (4:3)", 960, 720),
-    ("1280 x 720 (16:9)", 1280, 720),
+    ("320 × 240   · 4:3 · mínima", 320, 240),
+    ("480 × 360   · 4:3", 480, 360),
+    ("640 × 480   · 4:3 · recomendada", 640, 480),
+    ("640 × 360   · 16:9", 640, 360),
+    ("848 × 480   · 16:9", 848, 480),
+    ("960 × 540   · 16:9", 960, 540),
+    ("960 × 720   · 4:3", 960, 720),
+    ("1280 × 720  · 16:9 · HD", 1280, 720),
+    ("1920 × 1080 · 16:9 · Full HD", 1920, 1080),
 ]
+
+FPS_OPTIONS = [10, 12, 15, 20, 24, 25, 30]
+
+EFFECT_PRESETS: dict[str, dict[str, float | bool]] = {
+    "Sin efectos": {},
+    "Discreto": {"blur": 12.0, "grain": 8.0, "vignette": 15.0},
+    "Cámara mala": {"blur": 22.0, "grain": 30.0, "saturation": -20.0, "contrast": -12.0},
+    "Privacidad media": {"blur": 45.0},
+    "Privacidad alta": {"pixelate": 60.0},
+    "Irreconocible": {"pixelate": 85.0, "blur": 20.0},
+}
+"""Puntos de partida razonables.
+
+Existen porque nueve deslizadores a cero no sugieren qué hacer con ellos. Cada
+valor sigue siendo editable después de aplicar un preajuste.
+"""
+
+EFFECT_FIELDS = (
+    "blur", "pixelate", "brightness", "contrast",
+    "saturation", "zoom", "grain", "vignette",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -110,10 +138,13 @@ class MainWindow(QMainWindow):
         self._thread: QThread | None = None
         self._worker: PrepareWorker | None = None
         self._loading = True
-        self._last_error = ""
+        self._last_message = ""
 
         self.setWindowTitle("Cámara virtual por voz")
-        self.resize(1080, 700)
+        self.resize(1180, 780)
+        self.setMinimumSize(940, 640)
+        self.setStyleSheet(STYLESHEET)
+
         self._build()
         self._load_devices()
         self._load_from_config()
@@ -132,313 +163,586 @@ class MainWindow(QMainWindow):
     def _build(self) -> None:
         central = QWidget()
         root = QHBoxLayout(central)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(12)
-        root.addWidget(self._build_left(), 3)
-        root.addWidget(self._build_right(), 2)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(14)
+        root.addWidget(self._build_left(), 5)
+        root.addWidget(self._build_right(), 4)
         self.setCentralWidget(central)
-        self.statusBar().showMessage("Listo.")
+        self.statusBar().showMessage("Listo. Empieza eligiendo los dos videos.")
 
-    # --- columna izquierda: vista previa y estado ---------------------- #
+    # --- izquierda: estado y vista previa ----------------------------- #
 
     def _build_left(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
 
-        self.state_badge = QLabel("Detenido")
+        self.state_badge = QLabel()
         self.state_badge.setAlignment(Qt.AlignCenter)
-        self.state_badge.setMinimumHeight(44)
-        self._style_badge("-")
+        self.state_badge.setMinimumHeight(48)
+        self._apply_badge("-")
         layout.addWidget(self.state_badge)
 
         self.preview = QLabel("La vista previa aparecerá al iniciar.")
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumSize(480, 360)
+        self.preview.setMinimumSize(420, 300)
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview.setStyleSheet(
-            "background:#15181c; color:#7d8893; border:1px solid #2a2f36; border-radius:6px;"
+            "background:#0c0e11; color:#6e7681;"
+            "border:1px solid #2d343d; border-radius:8px;"
         )
         layout.addWidget(self.preview, 1)
 
-        meter_row = QHBoxLayout()
-        meter_row.addWidget(QLabel("Nivel"))
+        medidor = Card("nivel del micrófono")
         self.level_meter = QProgressBar()
         self.level_meter.setRange(-60, 0)
         self.level_meter.setValue(-60)
         self.level_meter.setFormat("%v dBFS")
-        meter_row.addWidget(self.level_meter, 1)
-        layout.addLayout(meter_row)
-
+        medidor.add(self.level_meter)
         self.detector_info = QLabel("Detector detenido.")
-        self.detector_info.setStyleSheet("color:#8b949e;")
-        layout.addWidget(self.detector_info)
+        self.detector_info.setObjectName("dim")
+        self.detector_info.setWordWrap(True)
+        medidor.add(self.detector_info)
+        layout.addWidget(medidor)
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        self.error_banner = QLabel()
-        self.error_banner.setWordWrap(True)
-        self.error_banner.setVisible(False)
-        self.error_banner.setFrameShape(QFrame.StyledPanel)
-        self.error_banner.setStyleSheet(
-            "background:#3a1f22; color:#ffb3b8; padding:8px; border-radius:4px;"
-        )
-        layout.addWidget(self.error_banner)
+        self.banner = QLabel()
+        self.banner.setWordWrap(True)
+        self.banner.setVisible(False)
+        self.banner.setFrameShape(QFrame.StyledPanel)
+        layout.addWidget(self.banner)
 
-        buttons = QHBoxLayout()
-        self.start_button = QPushButton("Iniciar")
-        self.start_button.setMinimumHeight(38)
+        botones = QHBoxLayout()
+        botones.setSpacing(8)
+        self.start_button = QPushButton("▶   Iniciar")
+        self.start_button.setObjectName("primary")
+        self.start_button.setMinimumHeight(42)
         self.start_button.clicked.connect(self._on_start)
-        buttons.addWidget(self.start_button, 2)
+        botones.addWidget(self.start_button, 2)
 
-        self.stop_button = QPushButton("Detener")
-        self.stop_button.setMinimumHeight(38)
+        self.stop_button = QPushButton("■   Detener")
+        self.stop_button.setMinimumHeight(42)
         self.stop_button.clicked.connect(self._on_stop)
-        buttons.addWidget(self.stop_button, 1)
-        layout.addLayout(buttons)
+        botones.addWidget(self.stop_button, 1)
+        layout.addLayout(botones)
 
-        self.metrics_label = QLabel("-")
-        self.metrics_label.setStyleSheet("color:#8b949e; font-family:Consolas,monospace;")
+        self.metrics_label = QLabel("—")
+        self.metrics_label.setStyleSheet(
+            "color:#8b949e; font-family:Consolas,monospace; font-size:11px;"
+        )
         layout.addWidget(self.metrics_label)
         return panel
 
-    # --- columna derecha: configuración ------------------------------- #
+    # --- derecha: pestañas -------------------------------------------- #
 
     def _build_right(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._scrollable(self._tab_clips()), "Videos")
+        self.tabs.addTab(self._scrollable(self._tab_audio()), "Micrófono")
+        self.tabs.addTab(self._scrollable(self._tab_detector()), "Detector")
+        self.tabs.addTab(self._scrollable(self._tab_effects()), "Efectos")
+        self.tabs.addTab(self._scrollable(self._tab_output()), "Salida")
+        layout.addWidget(self.tabs, 1)
+
+        guardar = QPushButton("Guardar configuración")
+        guardar.clicked.connect(self._on_save)
+        layout.addWidget(guardar)
+        return panel
+
+    @staticmethod
+    def _scrollable(contenido: QWidget) -> QScrollArea:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setContentsMargins(0, 0, 8, 0)
-
-        layout.addWidget(self._group_clips())
-        layout.addWidget(self._group_audio())
-        layout.addWidget(self._group_detector())
-        layout.addWidget(self._group_output())
-        layout.addStretch(1)
-
-        save = QPushButton("Guardar configuración")
-        save.clicked.connect(self._on_save)
-        layout.addWidget(save)
-
-        scroll.setWidget(inner)
+        scroll.setWidget(contenido)
         return scroll
 
-    def _group_clips(self) -> QGroupBox:
-        box = QGroupBox("1. Videos de referencia")
-        layout = QVBoxLayout(box)
+    @staticmethod
+    def _page() -> tuple[QWidget, QVBoxLayout]:
+        pagina = QWidget()
+        layout = QVBoxLayout(pagina)
+        layout.setContentsMargins(4, 10, 10, 10)
+        layout.setSpacing(10)
+        return pagina, layout
 
+    # --- pestaña: videos ---------------------------------------------- #
+
+    def _tab_clips(self) -> QWidget:
+        pagina, layout = self._page()
+
+        tarjeta = Card("clips de referencia")
         self.speaking_path = QLabel("(sin seleccionar)")
         self.silent_path = QLabel("(sin seleccionar)")
-        for label in (self.speaking_path, self.silent_path):
-            label.setWordWrap(True)
-            label.setStyleSheet("color:#8b949e;")
+        for etiqueta in (self.speaking_path, self.silent_path):
+            etiqueta.setObjectName("dim")
+            etiqueta.setWordWrap(True)
 
-        for title, label, slot in (
-            ("Clip hablando...", self.speaking_path, self._pick_speaking),
-            ("Clip en silencio...", self.silent_path, self._pick_silent),
-        ):
-            button = QPushButton(title)
-            button.clicked.connect(slot)
-            layout.addWidget(button)
-            layout.addWidget(label)
-            if title.startswith("Clip hablando"):
-                self.speaking_button = button
-            else:
-                self.silent_button = button
+        self.speaking_button = QPushButton("Elegir clip HABLANDO…")
+        self.speaking_button.clicked.connect(self._pick_speaking)
+        tarjeta.add(self.speaking_button)
+        tarjeta.add(self.speaking_path)
+
+        self.silent_button = QPushButton("Elegir clip EN SILENCIO…")
+        self.silent_button.clicked.connect(self._pick_silent)
+        tarjeta.add(self.silent_button)
+        tarjeta.add(self.silent_path)
 
         self.clip_info = QLabel()
         self.clip_info.setWordWrap(True)
         self.clip_info.setStyleSheet("color:#8b949e; font-size:11px;")
-        layout.addWidget(self.clip_info)
-        return box
+        tarjeta.add(self.clip_info)
+        layout.addWidget(tarjeta)
 
-    def _group_audio(self) -> QGroupBox:
-        box = QGroupBox("2. Micrófono")
-        layout = QVBoxLayout(box)
-        row = QHBoxLayout()
+        consejo = Card("cómo grabarlos")
+        texto = QLabel(
+            "Graba los dos <b>seguidos, sin mover la cámara ni cambiar la luz</b>, "
+            "de 8 a 20 s cada uno.<br><br>"
+            "Que el <b>primer fotograma de ambos</b> tenga la boca cerrada y la "
+            "mirada al frente: es la pose desde la que se reanuda el habla tras un "
+            "silencio largo.<br><br>"
+            "Evita gestos amplios, manos en plano y girar la cabeza."
+        )
+        texto.setWordWrap(True)
+        texto.setObjectName("dim")
+        consejo.add(texto)
+        layout.addWidget(consejo)
+
+        reproduccion = Card("reproducción")
+        self.loop_combo = combo(
+            [("Ida y vuelta (sin costura)", "pingpong"), ("Bucle normal", "loop")],
+            ayuda="Ida y vuelta reproduce hacia atrás al llegar al final, lo que "
+            "elimina el corte visible del salto del último al primer fotograma.",
+        )
+        self.loop_combo.currentIndexChanged.connect(self._on_live_video)
+        reproduccion.add(labelled_row("Modo de bucle", self.loop_combo))
+
+        self.speed_speaking = spin_double(0.25, 2.0, 0.05, 1.0)
+        self.speed_speaking.valueChanged.connect(self._on_live_video)
+        reproduccion.add(
+            labelled_row(
+                "Velocidad habla", self.speed_speaking,
+                ayuda="Útil si el movimiento de la boca se ve demasiado lento o "
+                "demasiado frenético.",
+            )
+        )
+
+        self.speed_silent = spin_double(0.25, 2.0, 0.05, 1.0)
+        self.speed_silent.valueChanged.connect(self._on_live_video)
+        reproduccion.add(labelled_row("Velocidad silencio", self.speed_silent))
+
+        self.transition = PercentSlider(
+            "Transición", maximo=800, defecto=160, sufijo=" ms",
+            ayuda="Duración del fundido cruzado al cambiar de clip. 0 corta en "
+            "seco; más de 400 ms se percibe como lentitud.",
+        )
+        self.transition.bind(lambda _v: self._on_live_video())
+        reproduccion.add(self.transition)
+
+        self.resume_window = PercentSlider(
+            "Reanudar habla antes de", maximo=5000, defecto=1500, sufijo=" ms",
+            ayuda="Si el habla vuelve antes de este tiempo el clip continúa donde "
+            "iba; si no, se rebobina al primer fotograma para no reanudar con la "
+            "boca a medio abrir.",
+        )
+        self.resume_window.bind(lambda _v: self._on_live_video())
+        reproduccion.add(self.resume_window)
+
+        layout.addWidget(reproduccion)
+        layout.addStretch(1)
+        return pagina
+
+    # --- pestaña: micrófono ------------------------------------------- #
+
+    def _tab_audio(self) -> QWidget:
+        pagina, layout = self._page()
+
+        tarjeta = Card("dispositivo de entrada")
+        fila = QHBoxLayout()
         self.mic_combo = QComboBox()
         self.mic_combo.currentIndexChanged.connect(self._on_mic_changed)
-        row.addWidget(self.mic_combo, 1)
-        refresh = QPushButton("Actualizar")
-        refresh.clicked.connect(self._load_devices)
-        row.addWidget(refresh)
-        layout.addLayout(row)
-        hint = QLabel("Se puede cambiar con la sesión en marcha.")
-        hint.setStyleSheet("color:#8b949e; font-size:11px;")
-        layout.addWidget(hint)
-        return box
+        fila.addWidget(self.mic_combo, 1)
+        actualizar = QPushButton("Actualizar")
+        actualizar.clicked.connect(self._load_devices)
+        fila.addWidget(actualizar)
+        tarjeta.add_layout(fila)
 
-    def _group_detector(self) -> QGroupBox:
-        box = QGroupBox("3. Detección de voz")
-        form = QFormLayout(box)
+        nota = QLabel(
+            "Se puede cambiar con la sesión en marcha. Los dispositivos WASAPI "
+            "aparecen primero: dan la latencia más baja y la frecuencia nativa."
+        )
+        nota.setWordWrap(True)
+        nota.setObjectName("dim")
+        tarjeta.add(nota)
+        layout.addWidget(tarjeta)
 
-        self.vad_backend = QComboBox()
-        self.vad_backend.addItem("Automático (WebRTC si está disponible)", "auto")
-        self.vad_backend.addItem("WebRTC VAD", "webrtc")
-        self.vad_backend.addItem("Energía (RMS adaptativo)", "rms")
+        aviso = Card("si el nivel salta a −120 dB")
+        texto = QLabel(
+            "Si el nivel alterna entre valores normales y exactamente −120 dBFS, "
+            "algo en la cadena de captura está recortando a cero: la supresión de "
+            "ruido de Windows, un «modo comunicaciones» o el software del propio "
+            "micrófono. Eso degrada cualquier detector de voz.<br><br>"
+            "Desactívalo en <i>Configuración → Sistema → Sonido → Entrada → tu "
+            "micrófono → Mejoras de audio</i>."
+        )
+        texto.setWordWrap(True)
+        texto.setObjectName("dim")
+        aviso.add(texto)
+        layout.addWidget(aviso)
+        layout.addStretch(1)
+        return pagina
+
+    # --- pestaña: detector -------------------------------------------- #
+
+    def _tab_detector(self) -> QWidget:
+        pagina, layout = self._page()
+
+        motor = Card("motor de detección")
+        self.vad_backend = combo(
+            [
+                ("Automático (WebRTC si está disponible)", "auto"),
+                ("WebRTC VAD", "webrtc"),
+                ("Energía (RMS adaptativo)", "rms"),
+            ],
+            ayuda="WebRTC distingue voz de ruido estacionario mucho mejor que el "
+            "nivel de energía. El modo energía es el respaldo.",
+        )
         self.vad_backend.currentIndexChanged.connect(
             lambda: self._apply_vad(backend=self.vad_backend.currentData())
         )
-        form.addRow("Detector", self.vad_backend)
+        motor.add(labelled_row("Detector", self.vad_backend))
 
-        self.aggressiveness = self._slider(0, 3, 1, lambda v: self._apply_vad(aggressiveness=v))
-        form.addRow("Exigencia (0-3)", self._with_value(self.aggressiveness, "{}"))
+        self.aggressiveness = PercentSlider(
+            "Exigencia", maximo=3, defecto=2, sufijo="",
+            ayuda="0 a 3. Más alto = menos falsos positivos con ruido, pero puede "
+            "perder voz baja.",
+        )
+        self.aggressiveness.bind(lambda v: self._apply_vad(aggressiveness=int(v)))
+        motor.add(self.aggressiveness)
+        layout.addWidget(motor)
 
-        self.snr_on = self._slider(3, 25, 1, lambda v: self._apply_vad(snr_on_db=float(v)))
-        form.addRow("Umbral de voz", self._with_value(self.snr_on, "{} dB sobre el ruido"))
+        umbrales = Card("sensibilidad")
+        self.snr_on = PercentSlider(
+            "Umbral de voz", minimo=3, maximo=25, defecto=9, sufijo=" dB",
+            ayuda="Cuántos dB por encima del ruido de fondo cuentan como voz.",
+        )
+        self.snr_on.bind(lambda v: self._apply_vad(snr_on_db=float(v)))
+        umbrales.add(self.snr_on)
 
-        self.attack = self._slider(20, 600, 10, lambda v: self._apply_vad(attack_ms=v))
-        form.addRow("Tiempo de activación", self._with_value(self.attack, "{} ms"))
+        self.gate_db = PercentSlider(
+            "Puerta de silencio", minimo=-70, maximo=-25, defecto=-50, sufijo=" dB",
+            ayuda="Por debajo de este nivel absoluto nunca hay voz. Si el detector "
+            "se activa solo, súbelo; si tu voz no lo activa, bájalo.",
+        )
+        self.gate_db.bind(lambda v: self._apply_vad(gate_db=float(v)))
+        umbrales.add(self.gate_db)
+        layout.addWidget(umbrales)
 
-        self.release = self._slider(100, 2000, 50, lambda v: self._apply_vad(release_ms=v))
-        form.addRow("Permanencia en voz", self._with_value(self.release, "{} ms"))
+        tiempos = Card("tiempos")
+        self.attack = PercentSlider(
+            "Activación", minimo=20, maximo=600, defecto=120, sufijo=" ms",
+            ayuda="Voz continua necesaria para pasar a «hablando». Es lo que domina "
+            "la latencia percibida.",
+        )
+        self.attack.bind(lambda v: self._apply_vad(attack_ms=int(v)))
+        tiempos.add(self.attack)
 
-        self.pause_tol = self._slider(0, 1200, 50, lambda v: self._apply_vad(pause_tolerance_ms=v))
-        form.addRow("Tolerancia a pausas", self._with_value(self.pause_tol, "{} ms"))
-        return box
+        self.release = PercentSlider(
+            "Permanencia en voz", minimo=100, maximo=2000, defecto=450, sufijo=" ms",
+            ayuda="Silencio continuo necesario para volver a «en silencio». Subirlo "
+            "evita cortes entre frases.",
+        )
+        self.release.bind(lambda v: self._apply_vad(release_ms=int(v)))
+        tiempos.add(self.release)
 
-    def _group_output(self) -> QGroupBox:
-        box = QGroupBox("4. Salida")
-        form = QFormLayout(box)
+        self.pause_tol = PercentSlider(
+            "Tolerancia a pausas", maximo=1200, defecto=350, sufijo=" ms",
+            ayuda="Huecos cortos al hablar que no reinician la cuenta de activación.",
+        )
+        self.pause_tol.bind(lambda v: self._apply_vad(pause_tolerance_ms=int(v)))
+        tiempos.add(self.pause_tol)
+        layout.addWidget(tiempos)
 
-        self.resolution = QComboBox()
-        for label, w, h in RESOLUTIONS:
-            self.resolution.addItem(label, (w, h))
+        ayuda = Card("ajustarlo con datos, no a ojo")
+        texto = QLabel(
+            "La sensibilidad depende del micrófono y de la sala: no hay un valor "
+            "por defecto que sirva para todos. Para medir:<br><br>"
+            "<code>camvoice-cli vad-test --duration 30</code><br><br>"
+            "Muestra nivel, piso de ruido y cada cambio de estado con marca de "
+            "tiempo. En silencio deberías ver <b>0 cambios</b>."
+        )
+        texto.setWordWrap(True)
+        texto.setObjectName("dim")
+        ayuda.add(texto)
+        layout.addWidget(ayuda)
+        layout.addStretch(1)
+        return pagina
+
+    # --- pestaña: efectos --------------------------------------------- #
+
+    def _tab_effects(self) -> QWidget:
+        pagina, layout = self._page()
+
+        cabecera = Card("efectos")
+        self.effects_enabled = QCheckBox("Aplicar efectos a la salida")
+        self.effects_enabled.stateChanged.connect(self._on_effects_toggled)
+        cabecera.add(self.effects_enabled)
+
+        self.preset_combo = combo(
+            [(nombre, nombre) for nombre in EFFECT_PRESETS],
+            ayuda="Puntos de partida. Después puedes ajustar cada deslizador.",
+        )
+        self.preset_combo.currentIndexChanged.connect(self._on_preset)
+        cabecera.add(labelled_row("Preajuste", self.preset_combo))
+
+        self.effects_summary = QLabel()
+        self.effects_summary.setWordWrap(True)
+        self.effects_summary.setObjectName("dim")
+        cabecera.add(self.effects_summary)
+        layout.addWidget(cabecera)
+
+        privacidad = Card("privacidad")
+        self.blur = PercentSlider(
+            "Desenfoque", defecto=0,
+            ayuda="Desenfoque gaussiano. El porcentaje es independiente de la "
+            "resolución: el 60 % se ve igual a 320×240 que a 720p.",
+        )
+        self.blur.bind(lambda v: self._apply_effect(blur=v))
+        privacidad.add(self.blur)
+
+        self.pixelate = PercentSlider(
+            "Pixelado", defecto=0,
+            ayuda="Mosaico de bloques. Al 100 % cada bloque mide 1/16 del ancho.",
+        )
+        self.pixelate.bind(lambda v: self._apply_effect(pixelate=v))
+        privacidad.add(self.pixelate)
+
+        nota = QLabel(
+            "Desenfoque y pixelado altos a la vez se anulan: el desenfoque borra "
+            "los bloques. Usa uno de los dos."
+        )
+        nota.setWordWrap(True)
+        nota.setStyleSheet("color:#8b949e; font-size:11px;")
+        privacidad.add(nota)
+        layout.addWidget(privacidad)
+
+        color = Card("imagen")
+        self.brightness = PercentSlider(
+            "Brillo", minimo=-100, maximo=100, defecto=0,
+            ayuda="Útil para igualar el clip con la luz actual de la sala.",
+        )
+        self.brightness.bind(lambda v: self._apply_effect(brightness=v))
+        color.add(self.brightness)
+
+        self.contrast = PercentSlider("Contraste", minimo=-100, maximo=100, defecto=0)
+        self.contrast.bind(lambda v: self._apply_effect(contrast=v))
+        color.add(self.contrast)
+
+        self.saturation = PercentSlider(
+            "Saturación", minimo=-100, maximo=100, defecto=0,
+            ayuda="−100 deja la imagen en blanco y negro.",
+        )
+        self.saturation.bind(lambda v: self._apply_effect(saturation=v))
+        color.add(self.saturation)
+        layout.addWidget(color)
+
+        extras = Card("aspecto y encuadre")
+        self.zoom = PercentSlider(
+            "Zoom", minimo=1.0, maximo=3.0, defecto=1.0, sufijo="×", decimales=2,
+            ayuda="Recorte centrado ampliado. Permite acercar la cara o quitar "
+            "fondo de los bordes sin volver a grabar.",
+        )
+        self.zoom.bind(lambda v: self._apply_effect(zoom=v))
+        extras.add(self.zoom)
+
+        self.grain = PercentSlider(
+            "Grano", defecto=0,
+            ayuda="Ruido de luminancia. Un clip comprimido se ve demasiado limpio "
+            "para ser una webcam; un poco de grano acerca el aspecto.",
+        )
+        self.grain.bind(lambda v: self._apply_effect(grain=v))
+        extras.add(self.grain)
+
+        self.vignette = PercentSlider(
+            "Viñeta", defecto=0, ayuda="Oscurece las esquinas.",
+        )
+        self.vignette.bind(lambda v: self._apply_effect(vignette=v))
+        extras.add(self.vignette)
+
+        self.flip_live = QCheckBox("Efecto espejo (en vivo)")
+        self.flip_live.setToolTip(
+            "Se aplica al instante, sin volver a preparar la caché. El espejo de "
+            "la pestaña Salida se hornea al preparar y cuesta cero, pero obliga a "
+            "reiniciar la sesión."
+        )
+        self.flip_live.stateChanged.connect(
+            lambda: self._apply_effect(flip_horizontal=self.flip_live.isChecked())
+        )
+        extras.add(self.flip_live)
+        layout.addWidget(extras)
+
+        reset = QPushButton("Restablecer todos los efectos")
+        reset.clicked.connect(self._reset_effects)
+        layout.addWidget(reset)
+        layout.addStretch(1)
+        return pagina
+
+    # --- pestaña: salida ---------------------------------------------- #
+
+    def _tab_output(self) -> QWidget:
+        pagina, layout = self._page()
+
+        formato = Card("formato de salida")
+        self.resolution = combo([(etiqueta, (w, h)) for etiqueta, w, h in RESOLUTIONS])
         self.resolution.currentIndexChanged.connect(self._on_geometry_changed)
-        form.addRow("Resolución", self.resolution)
+        formato.add(labelled_row("Resolución", self.resolution))
 
-        self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(5, 60)
-        self.fps_spin.valueChanged.connect(self._on_geometry_changed)
-        form.addRow("FPS", self.fps_spin)
+        self.fps_combo = combo([(f"{f} FPS", f) for f in FPS_OPTIONS])
+        self.fps_combo.currentIndexChanged.connect(self._on_geometry_changed)
+        formato.add(labelled_row("Cadencia", self.fps_combo))
 
-        self.fit_combo = QComboBox()
-        self.fit_combo.addItem("Recortar para llenar (sin deformar)", "cover")
-        self.fit_combo.addItem("Caber entero (con barras)", "contain")
-        self.fit_combo.addItem("Estirar (deforma)", "stretch")
+        self.fit_combo = combo(
+            [
+                ("Recortar para llenar (sin deformar)", "cover"),
+                ("Caber entero (con barras)", "contain"),
+                ("Estirar (deforma)", "stretch"),
+            ],
+            ayuda="Qué hacer cuando la relación de aspecto del clip no coincide "
+            "con la de salida. No se puede a la vez no deformar, no recortar y no "
+            "dejar barras.",
+        )
         self.fit_combo.currentIndexChanged.connect(self._on_geometry_changed)
-        form.addRow("Encuadre", self.fit_combo)
+        formato.add(labelled_row("Encuadre", self.fit_combo))
 
-        self.mirror_check = QCheckBox("Efecto espejo")
+        self.mirror_check = QCheckBox("Espejo horneado en la caché")
+        self.mirror_check.setToolTip(
+            "Coste cero en ejecución, pero obliga a reiniciar. Para probar el "
+            "espejo al momento usa el de la pestaña Efectos."
+        )
         self.mirror_check.stateChanged.connect(self._on_geometry_changed)
-        form.addRow("", self.mirror_check)
+        formato.add(self.mirror_check)
 
-        self.transition = self._slider(0, 600, 20, self._on_live_video)
-        form.addRow("Transición", self._with_value(self.transition, "{} ms"))
+        self.cache_info = QLabel()
+        self.cache_info.setWordWrap(True)
+        self.cache_info.setStyleSheet("color:#8b949e; font-size:11px;")
+        formato.add(self.cache_info)
+        layout.addWidget(formato)
 
-        self.loop_combo = QComboBox()
-        self.loop_combo.addItem("Ida y vuelta (sin costura)", "pingpong")
-        self.loop_combo.addItem("Bucle normal", "loop")
-        self.loop_combo.currentIndexChanged.connect(lambda: self._on_live_video(0))
-        form.addRow("Bucle", self.loop_combo)
-
-        self.speed_spin = QDoubleSpinBox()
-        self.speed_spin.setRange(0.25, 2.0)
-        self.speed_spin.setSingleStep(0.05)
-        self.speed_spin.valueChanged.connect(lambda: self._on_live_video(0))
-        form.addRow("Velocidad al hablar", self.speed_spin)
-
+        camara = Card("cámara virtual")
         self.virtual_check = QCheckBox("Enviar a la cámara virtual")
         self.virtual_check.stateChanged.connect(self._on_virtual_toggled)
-        form.addRow("", self.virtual_check)
+        camara.add(self.virtual_check)
 
         self.virtual_status = QLabel()
         self.virtual_status.setWordWrap(True)
-        self.virtual_status.setStyleSheet("color:#8b949e; font-size:11px;")
-        form.addRow("", self.virtual_status)
+        self.virtual_status.setObjectName("dim")
+        camara.add(self.virtual_status)
 
-        check = QPushButton("Comprobar cámara virtual")
-        check.clicked.connect(self._on_check_camera)
-        form.addRow("", check)
-        return box
-
-    # --- helpers de widgets ------------------------------------------- #
-
-    def _slider(self, low: int, high: int, step: int, on_change) -> QSlider:  # noqa: ANN001
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(low, high)
-        slider.setSingleStep(step)
-        slider.setPageStep(step * 2)
-        slider.valueChanged.connect(lambda v: None if self._loading else on_change(v))
-        return slider
-
-    def _with_value(self, slider: QSlider, template: str) -> QWidget:
-        wrapper = QWidget()
-        layout = QHBoxLayout(wrapper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(slider, 1)
-        label = QLabel()
-        label.setMinimumWidth(130)
-        label.setStyleSheet("color:#8b949e;")
-        layout.addWidget(label)
-
-        def update(value: int) -> None:
-            label.setText(template.format(value))
-
-        slider.valueChanged.connect(update)
-        update(slider.value())
-        return wrapper
+        fila = QHBoxLayout()
+        comprobar = QPushButton("Comprobar cámara")
+        comprobar.clicked.connect(self._on_check_camera)
+        fila.addWidget(comprobar)
+        listar = QPushButton("Ver cámaras del sistema")
+        listar.clicked.connect(self._on_list_cameras)
+        fila.addWidget(listar)
+        camara.add_layout(fila)
+        layout.addWidget(camara)
+        layout.addStretch(1)
+        return pagina
 
     # ------------------------------------------------------------------ #
     # Carga y guardado
     # ------------------------------------------------------------------ #
 
     def _load_devices(self) -> None:
-        previous = self.mic_combo.currentData() if self.mic_combo.count() else None
-        self._loading, prior = True, self._loading
+        anterior = self.mic_combo.currentData() if self.mic_combo.count() else None
+        previo, self._loading = self._loading, True
         self.mic_combo.clear()
         try:
             self._devices = list_input_devices()
         except AudioError as exc:
             self._devices = []
-            self._show_error(str(exc))
+            self._show_message(str(exc), "err")
         self.mic_combo.addItem("Dispositivo predeterminado de Windows", None)
         for dev in self._devices:
             self.mic_combo.addItem(dev.label, dev.index)
-        target = previous if previous is not None else self.cfg.audio.device
-        index = self.mic_combo.findData(target)
-        self.mic_combo.setCurrentIndex(max(0, index))
-        self._loading = prior
+        objetivo = anterior if anterior is not None else self.cfg.audio.device
+        self.mic_combo.setCurrentIndex(max(0, self.mic_combo.findData(objetivo)))
+        self._loading = previo
 
     def _load_from_config(self) -> None:
-        v, d, o = self.cfg.video, self.cfg.vad, self.cfg.output
+        v, d, o, e = self.cfg.video, self.cfg.vad, self.cfg.output, self.cfg.effects
         self.speaking_path.setText(v.speaking_clip or "(sin seleccionar)")
         self.silent_path.setText(v.silent_clip or "(sin seleccionar)")
 
-        index = self.resolution.findData((v.width, v.height))
-        if index < 0:
-            self.resolution.addItem(f"{v.width} x {v.height}", (v.width, v.height))
-            index = self.resolution.count() - 1
-        self.resolution.setCurrentIndex(index)
-        self.fps_spin.setValue(v.fps)
+        indice = self.resolution.findData((v.width, v.height))
+        if indice < 0:
+            self.resolution.addItem(
+                f"{v.width} × {v.height} · personalizada", (v.width, v.height)
+            )
+            indice = self.resolution.count() - 1
+        self.resolution.setCurrentIndex(indice)
+
+        indice_fps = self.fps_combo.findData(v.fps)
+        if indice_fps < 0:
+            self.fps_combo.addItem(f"{v.fps} FPS", v.fps)
+            indice_fps = self.fps_combo.count() - 1
+        self.fps_combo.setCurrentIndex(indice_fps)
+
         self.fit_combo.setCurrentIndex(max(0, self.fit_combo.findData(v.fit)))
         self.mirror_check.setChecked(v.mirror)
-        self.transition.setValue(v.transition_ms)
         self.loop_combo.setCurrentIndex(max(0, self.loop_combo.findData(v.loop_mode)))
-        self.speed_spin.setValue(v.speaking_speed)
+        self.speed_speaking.setValue(v.speaking_speed)
+        self.speed_silent.setValue(v.silent_speed)
+        self.transition.set_silently(v.transition_ms)
+        self.resume_window.set_silently(v.resume_window_ms)
         self.virtual_check.setChecked(o.enabled)
 
         self.vad_backend.setCurrentIndex(max(0, self.vad_backend.findData(d.backend)))
-        self.aggressiveness.setValue(d.aggressiveness)
-        self.snr_on.setValue(int(d.snr_on_db))
-        self.attack.setValue(d.attack_ms)
-        self.release.setValue(d.release_ms)
-        self.pause_tol.setValue(d.pause_tolerance_ms)
+        self.aggressiveness.set_silently(d.aggressiveness)
+        self.snr_on.set_silently(d.snr_on_db)
+        self.gate_db.set_silently(d.gate_db)
+        self.attack.set_silently(d.attack_ms)
+        self.release.set_silently(d.release_ms)
+        self.pause_tol.set_silently(d.pause_tolerance_ms)
+
+        self.effects_enabled.setChecked(e.enabled)
+        self._load_effects_into_widgets(e)
+        self._update_cache_info()
+        self._update_effects_summary()
+
+    def _load_effects_into_widgets(self, e: EffectsConfig) -> None:
+        for widget, valor in (
+            (self.blur, e.blur), (self.pixelate, e.pixelate),
+            (self.brightness, e.brightness), (self.contrast, e.contrast),
+            (self.saturation, e.saturation), (self.zoom, e.zoom),
+            (self.grain, e.grain), (self.vignette, e.vignette),
+        ):
+            widget.set_silently(valor)
+        anterior = self.flip_live.blockSignals(True)
+        self.flip_live.setChecked(e.flip_horizontal)
+        self.flip_live.blockSignals(anterior)
 
     def _collect_into_config(self) -> None:
         v, o = self.cfg.video, self.cfg.output
-        width, height = self.resolution.currentData()
-        v.width, v.height = int(width), int(height)
-        v.fps = self.fps_spin.value()
+        ancho, alto = self.resolution.currentData()
+        v.width, v.height = int(ancho), int(alto)
+        v.fps = int(self.fps_combo.currentData())
         v.fit = self.fit_combo.currentData()
         v.mirror = self.mirror_check.isChecked()
-        v.transition_ms = self.transition.value()
         v.loop_mode = self.loop_combo.currentData()
-        v.speaking_speed = float(self.speed_spin.value())
+        v.speaking_speed = float(self.speed_speaking.value())
+        v.silent_speed = float(self.speed_silent.value())
+        v.transition_ms = int(self.transition.value())
+        v.resume_window_ms = int(self.resume_window.value())
         o.enabled = self.virtual_check.isChecked()
         self.cfg.audio.device = self.mic_combo.currentData()
         self.cfg.audio.device_name = next(
@@ -447,114 +751,189 @@ class MainWindow(QMainWindow):
 
     def _on_save(self) -> None:
         self._collect_into_config()
-        errors = self.cfg.validate(require_clips=False)
-        if errors:
-            QMessageBox.warning(self, "Configuración incompleta", "\n".join(errors))
+        errores = self.cfg.validate(require_clips=False)
+        if errores:
+            QMessageBox.warning(self, "Configuración incompleta", "\n".join(errores))
             return
-        path = self.cfg.save(self.config_file)
-        self.statusBar().showMessage(f"Guardado en {path}", 5000)
+        ruta = self.cfg.save(self.config_file)
+        self.statusBar().showMessage(f"Guardado en {ruta}", 5000)
 
     # ------------------------------------------------------------------ #
-    # Selección de clips
+    # Clips
     # ------------------------------------------------------------------ #
 
     def _pick_speaking(self) -> None:
-        self._pick_clip("Selecciona el video en el que hablas", "speaking")
+        self._pick_clip("Selecciona el video en el que HABLAS", "speaking")
 
     def _pick_silent(self) -> None:
-        self._pick_clip("Selecciona el video en el que estás en silencio", "silent")
+        self._pick_clip("Selecciona el video en el que estás EN SILENCIO", "silent")
 
-    def _pick_clip(self, title: str, which: str) -> None:
-        start = self.cfg.video.speaking_clip or self.cfg.video.silent_clip or ""
-        path, _ = QFileDialog.getOpenFileName(
-            self, title, str(Path(start).parent) if start else "", VIDEO_FILTER
+    def _pick_clip(self, titulo: str, cual: str) -> None:
+        inicio = self.cfg.video.speaking_clip or self.cfg.video.silent_clip or ""
+        ruta, _ = QFileDialog.getOpenFileName(
+            self, titulo, str(Path(inicio).parent) if inicio else "", VIDEO_FILTER
         )
-        if not path:
+        if not ruta:
             return
         try:
-            probe_clip(path)
+            probe_clip(ruta)
         except ClipCacheError as exc:
             QMessageBox.critical(self, "Video no utilizable", str(exc))
             return
-        if which == "speaking":
-            self.cfg.video.speaking_clip = path
-            self.speaking_path.setText(path)
+        if cual == "speaking":
+            self.cfg.video.speaking_clip = ruta
+            self.speaking_path.setText(ruta)
         else:
-            self.cfg.video.silent_clip = path
-            self.silent_path.setText(path)
+            self.cfg.video.silent_clip = ruta
+            self.silent_path.setText(ruta)
         self._update_clip_info()
+        self._update_cache_info()
 
     def _update_clip_info(self) -> None:
-        lines: list[str] = []
-        for label, raw in (
+        lineas: list[str] = []
+        for etiqueta, ruta in (
             ("Hablando", self.cfg.video.speaking_clip),
             ("Silencio", self.cfg.video.silent_clip),
         ):
-            if not raw:
+            if not ruta:
                 continue
             try:
-                probe = probe_clip(raw)
+                probe = probe_clip(ruta)
             except ClipCacheError as exc:
-                lines.append(f"{label}: {exc}")
+                lineas.append(f"{etiqueta}: {exc}")
                 continue
-            lines.append(
-                f"{label}: {probe.width}x{probe.height}, {probe.fps:.1f} FPS, "
+            lineas.append(
+                f"{etiqueta}: {probe.width}×{probe.height}, {probe.fps:.1f} FPS, "
                 f"{probe.duration_s:.1f} s, {probe.fourcc or '?'}"
             )
-        self.clip_info.setText("\n".join(lines) or "Selecciona los dos videos para continuar.")
+        self.clip_info.setText(
+            "\n".join(lineas) or "Selecciona los dos videos para continuar."
+        )
+
+    def _update_cache_info(self) -> None:
+        from ..config import frame_bytes
+
+        v = self.cfg.video
+        try:
+            por_fotograma = frame_bytes(v.width, v.height, v.pixel_format)
+        except ValueError:
+            return
+        self.cache_info.setText(
+            f"Caché de fotogramas: {por_fotograma * v.fps / 1e6:.1f} MB por segundo "
+            f"de clip ({por_fotograma / 1024:.0f} KB por fotograma, "
+            f"{v.pixel_format.upper()}). Es el precio de no decodificar video en el "
+            "bucle de salida."
+        )
 
     # ------------------------------------------------------------------ #
     # Cambios en caliente
     # ------------------------------------------------------------------ #
 
-    def _apply_vad(self, **changes) -> None:
+    def _apply_vad(self, **cambios) -> None:
         if self._loading:
             return
-        for key, value in changes.items():
-            setattr(self.cfg.vad, key, value)
+        for clave, valor in cambios.items():
+            setattr(self.cfg.vad, clave, valor)
         # El umbral de apagado sigue al de encendido para que no se invierta.
-        changes.setdefault("snr_off_db", max(1.0, self.cfg.vad.snr_on_db - 4.0))
-        self.cfg.vad.snr_off_db = changes["snr_off_db"]
+        cambios.setdefault("snr_off_db", max(1.0, self.cfg.vad.snr_on_db - 4.0))
+        self.cfg.vad.snr_off_db = cambios["snr_off_db"]
         try:
-            self.session.audio.apply_vad_changes(**changes)
+            self.session.audio.apply_vad_changes(**cambios)
         except AttributeError:
             pass
 
-    def _on_live_video(self, _value: int = 0) -> None:
+    def _apply_effect(self, **cambios) -> None:
+        """Surte efecto al instante: la cadena lee el mismo objeto de config."""
+        if self._loading:
+            return
+        for clave, valor in cambios.items():
+            setattr(self.cfg.effects, clave, valor)
+        self._update_effects_summary()
+
+    def _on_effects_toggled(self) -> None:
+        if self._loading:
+            return
+        self.cfg.effects.enabled = self.effects_enabled.isChecked()
+        self._update_effects_summary()
+
+    def _on_preset(self) -> None:
+        if self._loading:
+            return
+        nombre = self.preset_combo.currentData()
+        ajustes = EFFECT_PRESETS.get(nombre, {})
+        base = EffectsConfig()
+        previo, self._loading = self._loading, True
+        try:
+            for campo in EFFECT_FIELDS:
+                setattr(
+                    self.cfg.effects, campo, ajustes.get(campo, getattr(base, campo))
+                )
+            self.cfg.effects.flip_horizontal = bool(
+                ajustes.get("flip_horizontal", self.cfg.effects.flip_horizontal)
+            )
+            self._load_effects_into_widgets(self.cfg.effects)
+        finally:
+            self._loading = previo
+        self.effects_enabled.setChecked(True)
+        self._update_effects_summary()
+        self.statusBar().showMessage(f"Preajuste aplicado: {nombre}", 3000)
+
+    def _reset_effects(self) -> None:
+        if self.preset_combo.currentIndex() == 0:
+            self._on_preset()
+        else:
+            self.preset_combo.setCurrentIndex(0)
+
+    def _update_effects_summary(self) -> None:
+        from ..video.effects import EffectChain
+
+        cadena = EffectChain(self.cfg.effects)
+        if not cadena.active:
+            self.effects_summary.setText(
+                "Ninguno activo: la salida va sin tocar y sin coste añadido."
+            )
+            return
+        self.effects_summary.setText(f"Activos: {cadena.describe()}")
+
+    def _on_live_video(self, _valor: int = 0) -> None:
         if self._loading:
             return
         v = self.cfg.video
-        v.transition_ms = self.transition.value()
+        v.transition_ms = int(self.transition.value())
+        v.resume_window_ms = int(self.resume_window.value())
         v.loop_mode = self.loop_combo.currentData()
-        v.speaking_speed = float(self.speed_spin.value())
+        v.speaking_speed = float(self.speed_speaking.value())
+        v.silent_speed = float(self.speed_silent.value())
 
     def _on_mic_changed(self) -> None:
         if self._loading:
             return
-        index = self.mic_combo.currentData()
-        name = next((d.name for d in self._devices if d.index == index), "")
-        self.cfg.audio.device = index
-        self.cfg.audio.device_name = name
+        indice = self.mic_combo.currentData()
+        nombre = next((d.name for d in self._devices if d.index == indice), "")
+        self.cfg.audio.device = indice
+        self.cfg.audio.device_name = nombre
         if self.session.audio.running:
-            self.session.audio.set_device(index, name)
-            self.statusBar().showMessage("Cambiando de micrófono...", 3000)
+            self.session.audio.set_device(indice, nombre)
+            self.statusBar().showMessage("Cambiando de micrófono…", 3000)
 
     def _on_geometry_changed(self) -> None:
         if self._loading:
             return
         self._collect_into_config()
+        self._update_cache_info()
         if self.session.running:
             self.statusBar().showMessage(
-                "La resolución, los FPS y el encuadre se aplican al volver a iniciar.", 6000
+                "La resolución, los FPS y el encuadre se aplican al volver a iniciar.",
+                6000,
             )
 
     def _on_virtual_toggled(self) -> None:
         if self._loading:
             return
-        enabled = self.virtual_check.isChecked()
-        self.cfg.output.enabled = enabled
+        activo = self.virtual_check.isChecked()
+        self.cfg.output.enabled = activo
         if self.session.engine is not None:
-            self.session.engine.set_virtual_output(enabled)
+            self.session.engine.set_virtual_output(activo)
 
     def _on_check_camera(self) -> None:
         from ..output.sink import diagnose_virtual_camera
@@ -571,16 +950,21 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.warning(self, "Cámara virtual no disponible", diag.detail)
 
+    def _on_list_cameras(self) -> None:
+        from ..output.filters import describe_availability
+
+        QMessageBox.information(self, "Cámaras del sistema", describe_availability())
+
     # ------------------------------------------------------------------ #
     # Arranque y parada
     # ------------------------------------------------------------------ #
 
     def _on_start(self) -> None:
         self._collect_into_config()
-        errors = self.cfg.validate()
-        if errors:
+        errores = self.cfg.validate()
+        if errores:
             QMessageBox.warning(
-                self, "Falta configuración", "\n".join(f"- {e}" for e in errors)
+                self, "Falta configuración", "\n".join(f"• {e}" for e in errores)
             )
             return
 
@@ -588,8 +972,8 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(False)
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)
-        self.statusBar().showMessage("Preparando los clips...")
-        self._hide_error()
+        self.statusBar().showMessage("Preparando los clips…")
+        self._hide_message()
 
         self._thread = QThread(self)
         self._worker = PrepareWorker(self.session, force=False)
@@ -599,11 +983,11 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._on_prepared)
         self._thread.start()
 
-    def _on_prepare_progress(self, done: int, total: int, message: str) -> None:
+    def _on_prepare_progress(self, hechos: int, total: int, mensaje: str) -> None:
         if total:
             self.progress.setRange(0, total)
-            self.progress.setValue(done)
-        self.progress.setFormat(f"{message} - %p%")
+            self.progress.setValue(hechos)
+        self.progress.setFormat(f"{mensaje} — %p%")
 
     def _on_prepared(self, clips, error: str) -> None:  # noqa: ANN001
         if self._thread is not None:
@@ -615,22 +999,21 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(True)
 
         if clips is None:
-            self._show_error(error)
+            self._show_message(error, "err")
             self.statusBar().showMessage("No se pudo preparar.", 5000)
             return
 
-        for warning in clips.warnings:
-            self.statusBar().showMessage(warning, 8000)
-        self.clip_info.setText(
-            f"{clips.speaking.describe()}\n{clips.silent.describe()}\n"
-            f"Caché total: {clips.total_mb:.0f} MB"
-            + ("\n\nAvisos:\n- " + "\n- ".join(clips.warnings) if clips.warnings else "")
-        )
+        detalle = f"{clips.speaking.describe()}\n{clips.silent.describe()}"
+        detalle += f"\nCaché total: {clips.total_mb:.0f} MB"
+        if clips.warnings:
+            detalle += "\n\nAvisos:\n• " + "\n• ".join(clips.warnings)
+            self._show_message(clips.warnings[0], "warn")
+        self.clip_info.setText(detalle)
 
         try:
             self.session.start()
         except SessionError as exc:
-            self._show_error(str(exc))
+            self._show_message(str(exc), "err")
             return
         self._set_running(True)
         self.statusBar().showMessage("En marcha.", 4000)
@@ -638,75 +1021,64 @@ class MainWindow(QMainWindow):
     def _on_stop(self) -> None:
         self.session.stop()
         self._set_running(False)
-        self.preview.setText("Detenido.")
         self.preview.setPixmap(QPixmap())
-        self._style_badge("-")
-        self.state_badge.setText("Detenido")
+        self.preview.setText("Detenido.")
+        self._apply_badge("-")
         self.statusBar().showMessage("Detenido.", 4000)
 
-    def _set_running(self, running: bool) -> None:
-        self.start_button.setEnabled(not running)
-        self.stop_button.setEnabled(running)
+    def _set_running(self, corriendo: bool) -> None:
+        self.start_button.setEnabled(not corriendo)
+        self.stop_button.setEnabled(corriendo)
         # Lo que invalida la caché de fotogramas no se toca en caliente.
         for widget in (
-            self.speaking_button,
-            self.silent_button,
-            self.resolution,
-            self.fps_spin,
-            self.fit_combo,
-            self.mirror_check,
+            self.speaking_button, self.silent_button, self.resolution,
+            self.fps_combo, self.fit_combo, self.mirror_check,
         ):
-            widget.setEnabled(not running)
+            widget.setEnabled(not corriendo)
 
     # ------------------------------------------------------------------ #
     # Refresco periódico
     # ------------------------------------------------------------------ #
 
     def _refresh(self) -> None:
-        status = self.session.status()
-        voice, render = status.voice, status.render
+        estado = self.session.status()
+        voz, render = estado.voice, estado.render
 
-        key = render.state.value if render.running else "-"
-        self._style_badge(key)
-        self.state_badge.setText(
-            STATE_STYLES.get(key, ("Detenido", "", ""))[0]
-            if render.running
-            else "Detenido"
-        )
+        self._apply_badge(render.state.value if render.running else "-")
+        self.level_meter.setValue(int(max(-60.0, min(0.0, voz.rms_db))))
 
-        self.level_meter.setValue(int(max(-60.0, min(0.0, voice.rms_db))))
-        if voice.running:
-            detail = (
-                f"Detector {voice.backend} a {voice.samplerate} Hz"
-                + (f" (desde {voice.resampled_from} Hz)" if voice.resampled_from and voice.resampled_from != voice.samplerate else "")
-                + f" | piso de ruido {voice.noise_floor_db:.0f} dB"
-                + f" | SNR {voice.snr_db:+.0f} dB"
-                + f" | latencia de activación ~{voice.expected_latency_ms} ms"
-                + (" | calibrando..." if voice.calibrating else "")
+        if voz.running:
+            extra = ""
+            if voz.resampled_from and voz.resampled_from != voz.samplerate:
+                extra = f" (desde {voz.resampled_from} Hz)"
+            self.detector_info.setText(
+                f"{voz.backend} a {voz.samplerate} Hz{extra}  ·  "
+                f"ruido {voz.noise_floor_db:.0f} dB  ·  SNR {voz.snr_db:+.0f} dB  ·  "
+                f"latencia ~{voz.expected_latency_ms} ms"
+                + ("  ·  calibrando…" if voz.calibrating else "")
             )
         else:
-            detail = "Detector detenido."
-        self.detector_info.setText(detail)
+            self.detector_info.setText("Detector detenido.")
 
         if render.running:
             self.metrics_label.setText(
                 f"FPS {render.fps_effective:5.2f}/{self.cfg.video.fps}   "
                 f"ms/frame {render.avg_frame_ms:5.2f} (peor {render.worst_frame_ms:5.2f})   "
-                f"fotogramas {render.frames_sent}   "
-                f"tardíos {render.late_frames}   cambios {render.transitions}"
+                f"frames {render.frames_sent}   tardíos {render.late_frames}   "
+                f"cambios {render.transitions}"
             )
             self.virtual_status.setText(
                 f"Activa: {render.sink_device}" if render.virtual_output
                 else "Cámara virtual inactiva."
             )
         else:
-            self.metrics_label.setText("-")
+            self.metrics_label.setText("—")
 
-        message = render.error or voice.hint or render.warning
-        if message:
-            self._show_error(message)
-        elif self._last_error:
-            self._hide_error()
+        mensaje = render.error or voz.hint or render.warning
+        if mensaje:
+            self._show_message(mensaje, "err" if (render.error or voz.error) else "warn")
+        elif self._last_message:
+            self._hide_message()
 
         self._refresh_preview()
 
@@ -714,34 +1086,35 @@ class MainWindow(QMainWindow):
         frame = self.session.latest_preview()
         if frame is None:
             return
-        height, width = frame.shape[:2]
-        image = QImage(
-            np.ascontiguousarray(frame).data, width, height, 3 * width, QImage.Format_BGR888
+        alto, ancho = frame.shape[:2]
+        imagen = QImage(
+            np.ascontiguousarray(frame).data, ancho, alto, 3 * ancho, QImage.Format_BGR888
         )
-        pixmap = QPixmap.fromImage(image.copy())
+        pixmap = QPixmap.fromImage(imagen.copy())
         self.preview.setPixmap(
-            pixmap.scaled(
-                self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+            pixmap.scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
 
-    def _style_badge(self, key: str) -> None:
-        _, background, color = STATE_STYLES.get(key, ("", "#23272e", "#8b949e"))
-        self.state_badge.setStyleSheet(
-            f"background:{background}; color:{color}; border-radius:6px; "
-            "font-size:17px; font-weight:600;"
-        )
+    def _apply_badge(self, clave: str) -> None:
+        texto, estilo = state_badge_style(clave)
+        self.state_badge.setText(texto)
+        self.state_badge.setStyleSheet(estilo)
 
-    def _show_error(self, message: str) -> None:
-        if message == self._last_error:
+    def _show_message(self, texto: str, nivel: str = "warn") -> None:
+        if texto == self._last_message:
             return
-        self._last_error = message
-        self.error_banner.setText(message)
-        self.error_banner.setVisible(True)
+        self._last_message = texto
+        colores = {"err": ("#3a1f22", "#ffb3b8"), "warn": ("#332a12", "#e3b341")}
+        fondo, color = colores.get(nivel, colores["warn"])
+        self.banner.setStyleSheet(
+            f"background:{fondo}; color:{color}; padding:9px; border-radius:6px;"
+        )
+        self.banner.setText(texto)
+        self.banner.setVisible(True)
 
-    def _hide_error(self) -> None:
-        self._last_error = ""
-        self.error_banner.setVisible(False)
+    def _hide_message(self) -> None:
+        self._last_message = ""
+        self.banner.setVisible(False)
 
     # ------------------------------------------------------------------ #
 
@@ -760,6 +1133,7 @@ class MainWindow(QMainWindow):
 def run_gui(cfg: AppConfig, config_file: Path | None = None) -> int:
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Cámara virtual por voz")
+    app.setStyle("Fusion")
     window = MainWindow(cfg, config_file)
     window.show()
     return int(app.exec())

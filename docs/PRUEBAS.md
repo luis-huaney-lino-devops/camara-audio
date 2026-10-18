@@ -12,7 +12,7 @@ actual está en `plan.md` §8 y los resultados de rendimiento en `METRICS.md`.
 ## 1. Pruebas automatizadas
 
 ```
-pytest                    # 163 pruebas, ~15 s
+pytest                    # 233 pruebas, ~16 s
 pytest -v                 # con el nombre de cada caso
 pytest tests/test_gate.py # solo la histéresis
 ```
@@ -33,6 +33,8 @@ fallar; el resto sigue cubriendo el detector de energía.
 | `test_engine.py` | Reloj sin deriva, cadencia real del motor, fallo de la salida, validación de configuración, métricas | CA-06, CA-08, CA-09, CA-12 |
 | `test_filters.py` | Enumeración del registro de Windows, clasificación de filtros, argumentos de `regsvr32` | CA-07, CA-13 |
 | `test_cli.py` | Punto de entrada, subcomandos, recorrido completo como proceso | CA-03, CA-13 |
+| `test_effects.py` | Cada efecto, independencia de la resolución, rangos, coste | CA-09, CA-10 |
+| `test_ui.py` | Ventana, pestañas, los controles escriben en la configuración, bloqueo en caliente | CA-10, CA-11 |
 
 ### Las dos pruebas que conviene conocer
 
@@ -209,6 +211,12 @@ Con la sesión **en marcha**, sin detenerla ni reiniciar la aplicación:
 - [ ] Mover la transición a 0 ms y a 600 ms y notar la diferencia.
 - [ ] Comprobar que los controles de clips, resolución, FPS, encuadre y espejo
       están **deshabilitados** (invalidan la caché; requieren reiniciar).
+- [ ] En la pestaña **Efectos**, mover desenfoque y pixelado: el cambio debe
+      verse en la vista previa **al instante**, sin volver a preparar.
+- [ ] Aplicar un preajuste y comprobar que reemplaza los valores anteriores en
+      lugar de sumarse a ellos.
+- [ ] Subir el desenfoque al 100 % y verificar con el Administrador de tareas
+      que la CPU sigue siendo baja.
 - [ ] Detener y volver a iniciar sin cerrar la aplicación.
 - [ ] Cerrar la ventana: el proceso debe terminar, sin hilos colgados.
 

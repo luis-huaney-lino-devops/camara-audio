@@ -50,6 +50,34 @@ clic en `INSTALAR.bat` y luego en `PROBAR.bat`.
 Aparece como **«CamVoice Virtual Camera»** en Teams, Zoom, Meet y el navegador.
 **No hace falta OBS.** Detalles en [docs/CAMARA-VIRTUAL.md](docs/CAMARA-VIRTUAL.md).
 
+## Efectos
+
+Sobre el fotograma de salida, ajustables en vivo desde la pestaña **Efectos** o
+por línea de comandos. Todos son porcentajes derivados del ancho, así que el
+60 % se ve igual a 320x240 que a 720p.
+
+| Efecto | Para qué |
+|---|---|
+| **Desenfoque** | Privacidad. Hace la imagen no identificable sin ocultarla |
+| **Pixelado** | Igual, con otro aspecto. Bloques de hasta 1/16 del ancho |
+| **Brillo**, **contraste**, **saturación** | Igualar el clip con la luz actual de la sala |
+| **Zoom** | Reencuadrar o quitar fondo sin volver a grabar |
+| **Grano** | Un clip comprimido se ve demasiado limpio para ser una webcam |
+| **Viñeta** | Oscurecer las esquinas |
+| **Espejo** | En vivo, sin volver a preparar la caché |
+
+Hay preajustes («Discreto», «Cámara mala», «Privacidad alta»…) porque nueve
+deslizadores a cero no sugieren qué hacer con ellos.
+
+```bash
+camvoice run --blur 45 --grain 20 --vignette 30 --saturation -25
+camvoice bench --duration 60 --metrics --pixelate 60   # medir su coste
+```
+
+Coste medido de la cadena completa a 640x480: **5,6 ms por fotograma** de los
+66,7 disponibles, y **13,8 % de un núcleo**. Llegar ahí requirió tres
+optimizaciones; están en [docs/METRICS.md](docs/METRICS.md) §Medición 3.
+
 ## Comandos
 
 | Comando | Para qué |
@@ -66,6 +94,8 @@ Aparece como **«CamVoice Virtual Camera»** en Teams, Zoom, Meet y el navegador
 | `camvoice bench --duration 1800` | Mide CPU, memoria y FPS |
 | `camvoice make-clips` | Genera clips sintéticos de prueba |
 | `camvoice clean` | Vacía la caché de fotogramas |
+
+Los subcomandos `run`, `bench` y `gui` aceptan además `--blur`, `--pixelate`, `--brightness`, `--contrast`, `--saturation`, `--vignette`, `--grain`, `--zoom` y `--no-effects`.
 
 Con el ejecutable empaquetado, los subcomandos van en `camvoice-cli.exe` y la
 interfaz en `camvoice.exe`.
@@ -123,7 +153,7 @@ repetirlo en el Core i5 de referencia y durante 30 minutos.
 ## Pruebas
 
 ```bash
-pytest          # 165 pruebas, ~15 s, sin micrófono ni cámara
+pytest          # 233 pruebas, ~16 s, sin micrófono ni cámara
 ```
 
 Procedimiento completo, incluidas las pruebas manuales, en

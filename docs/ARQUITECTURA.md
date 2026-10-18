@@ -252,7 +252,53 @@ reflejan hasta 8 veces y, más allá, se ancla en un extremo en lugar de divergi
 - **El clip de silencio nunca se pausa.** Avanza siempre, incluso mientras se
   habla, para que parpadeos y respiración no se congelen.
 
-### 4.5. Reloj
+### 4.5. Cadena de efectos
+
+`video/effects.py`. Se aplica al fotograma de salida, después de componer. Los
+parámetros son **porcentajes derivados del ancho del fotograma**, no píxeles
+absolutos: así el 60 % de desenfoque se ve igual a 320x240 que a 720p y el
+usuario no tiene que reajustar cada vez que cambia la resolución.
+
+Orden: zoom → color → pixelado → desenfoque → grano → viñeta. No es arbitrario;
+el razonamiento de cada paso está en el docstring del módulo.
+
+Con el formato interno NV12 hace falta ir y volver a BGR, porque desenfocar el
+plano UV entrelazado mezclaría las componentes U y V y produciría manchas de
+color. Cuesta unos 1,5 ms a 640x480. Si no hay ningún efecto activo **no se
+convierte nada**: `EffectChain.active` es falso y el motor devuelve la misma
+vista del `memmap`.
+
+#### Tres optimizaciones que decidieron si la función era viable
+
+La primera versión funcionaba y consumía **76 % de un núcleo**, cuatro veces el
+objetivo. Se midió, se encontró el porqué, y bajó a **13,8 %**:
+
+| Cambio | Antes | Después |
+|---|---|---|
+| Desenfoque: reducir, filtrar con sigma/k, ampliar | 20 ms | 2,4 ms |
+| Grano y viñeta con `addWeighted`/`multiply` en vez de ida y vuelta a float32 en NumPy | 9 ms | 1,6 ms |
+| `cv2.setNumThreads(1)` durante el render | 12,5 CPU-ms | 4,2 CPU-ms |
+
+La tercera es la menos obvia y la más instructiva. Medido con la cadena completa
+a 640x480:
+
+```
+  hilos   ms/fotograma   CPU-ms/fotograma
+      1       4.44             4.22
+      8       4.39            12.50
+```
+
+A este tamaño de imagen **la paralelización de OpenCV no mejora el tiempo de
+pared** —repartir el trabajo cuesta tanto como lo que ahorra— pero **triplica la
+CPU consumida**. Y aquí sobran 60 ms de los 66,7 de presupuesto por fotograma,
+mientras que la aplicación de videollamada sí necesita CPU para codificar su
+propio video. Cambiar tiempo de pared que no se usa por CPU que hace falta en
+otro sitio es un mal negocio.
+
+La preparación de clips es el caso contrario —un lote de una vez, con el usuario
+esperando delante— así que ahí se usan todos los hilos.
+
+### 4.6. Reloj
 
 `Pacer`. El instante objetivo se **acumula** (`next += 1/fps`), no se duerme un
 delta en cada vuelta: así el error de cada espera no se suma y en 30 minutos la
@@ -267,7 +313,7 @@ corre el motor. Python 3.11+ ya usa temporizadores de alta resolución en
 `time.sleep`, pero esto cubre versiones anteriores y entornos donde otra
 librería la haya bajado.
 
-### 4.6. Salida
+### 4.7. Salida
 
 `VirtualCamSink` envuelve `pyvirtualcam.Camera`. Traduce los fallos conocidos a
 mensajes accionables (no instalada / en uso por otra aplicación) y reabre con
@@ -319,6 +365,8 @@ que usan las pruebas para no tocar la instalación real):
 | `video/cache.py` | Preparación, `memmap`, geometría, NV12 |
 | `video/clip.py` | `ClipPlayer` (puro) |
 | `video/composer.py` | `FrameComposer` (puro) |
+| `video/effects.py` | Cadena de efectos (pura), límite de hilos de OpenCV |
 | `video/engine.py` | `Pacer`, hilo de render, vista previa, `RenderStatus` |
 | `output/sink.py` | `VirtualCamSink`, `NullSink`, diagnóstico |
-| `ui/app.py` | Ventana PySide6 |
+| `ui/app.py` | Ventana PySide6 con pestañas |
+| `ui/widgets.py` | Widgets reutilizables y hoja de estilo |

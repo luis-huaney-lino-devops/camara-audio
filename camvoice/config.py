@@ -170,6 +170,49 @@ class VideoConfig:
 
 
 @dataclass
+class EffectsConfig:
+    """Efectos sobre el fotograma de salida.
+
+    Todos los valores son porcentajes para que el resultado visual no dependa
+    de la resolución: el 60 % de desenfoque se ve igual a 320x240 que a 720p.
+    Se aplican en caliente, sin volver a preparar la caché de clips.
+    """
+
+    enabled: bool = True
+    """Interruptor general. Desactivarlo salta la cadena completa, incluida la
+    conversión de formato que necesita, y deja el coste en cero."""
+
+    zoom: float = 1.0
+    """Recorte centrado ampliado, 1.0 a 4.0. Reencuadra sin regrabar."""
+
+    blur: float = 0.0
+    """Desenfoque gaussiano, 0 a 100 %."""
+
+    pixelate: float = 0.0
+    """Pixelado en bloques, 0 a 100 %."""
+
+    brightness: float = 0.0
+    """-100 a 100. Útil para igualar el clip con la luz de la sala."""
+
+    contrast: float = 0.0
+    """-100 a 100, en escala logarítmica para que el deslizador sea simétrico."""
+
+    saturation: float = 0.0
+    """-100 (gris) a 100 (saturado)."""
+
+    vignette: float = 0.0
+    """Oscurecimiento de las esquinas, 0 a 100 %."""
+
+    grain: float = 0.0
+    """Ruido de luminancia, 0 a 100 %. Un clip comprimido se ve demasiado
+    limpio para ser una webcam; un poco de grano acerca el aspecto."""
+
+    flip_horizontal: bool = False
+    """Espejo aplicado en vivo, sin tocar la caché (a diferencia de
+    `VideoConfig.mirror`, que se hornea al preparar)."""
+
+
+@dataclass
 class OutputConfig:
     """Cámara virtual."""
 
@@ -203,6 +246,7 @@ class AppConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     vad: VadConfig = field(default_factory=VadConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
+    effects: EffectsConfig = field(default_factory=EffectsConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
 
@@ -310,6 +354,25 @@ class AppConfig:
         if o.reopen_attempts < 0:
             errs.append("Los reintentos de reapertura no pueden ser negativos.")
 
+        e = self.effects
+        if not 1.0 <= e.zoom <= 4.0:
+            errs.append("El zoom debe estar entre 1.0 y 4.0.")
+        for etiqueta, valor in (
+            ("desenfoque", e.blur),
+            ("pixelado", e.pixelate),
+            ("viñeta", e.vignette),
+            ("grano", e.grain),
+        ):
+            if not 0.0 <= valor <= 100.0:
+                errs.append(f"El {etiqueta} debe estar entre 0 y 100 %.")
+        for etiqueta, valor in (
+            ("brillo", e.brightness),
+            ("contraste", e.contrast),
+            ("saturación", e.saturation),
+        ):
+            if not -100.0 <= valor <= 100.0:
+                errs.append(f"El {etiqueta} debe estar entre -100 y 100 %.")
+
         return errs
 
     def warnings(self) -> list[str]:
@@ -333,6 +396,18 @@ class AppConfig:
             warns.append(
                 f"Un ataque de {self.vad.attack_ms} ms supera el objetivo de latencia "
                 "de 200-400 ms."
+            )
+        e = self.effects
+        if e.enabled and v.pixel_format == "nv12" and (e.blur or e.pixelate or e.grain):
+            warns.append(
+                "Con efectos activos y formato NV12 hay una ida y vuelta a BGR "
+                "por fotograma. Son unos 2 ms a 640x480; si buscas el mínimo "
+                "coste con efectos, usa el formato 'bgr'."
+            )
+        if e.enabled and e.blur > 70 and e.pixelate > 70:
+            warns.append(
+                "Desenfoque y pixelado altos a la vez se anulan entre sí: el "
+                "desenfoque borra los bloques. Usa uno de los dos."
             )
         if v.pixel_format == "nv12" and self.output.backend == "unitycapture":
             warns.append(
@@ -373,6 +448,7 @@ _SECTIONS: dict[str, type] = {
     "audio": AudioConfig,
     "vad": VadConfig,
     "video": VideoConfig,
+    "effects": EffectsConfig,
     "output": OutputConfig,
     "metrics": MetricsConfig,
 }

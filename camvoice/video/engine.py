@@ -26,8 +26,9 @@ import numpy as np
 from ..audio.gate import VoiceState
 from ..config import AppConfig
 from ..output.sink import FrameSink, NullSink, SinkError, VirtualCamSink
-from .cache import ClipCache, ClipCacheError, to_display_bgr
+from .cache import ClipCache, ClipCacheError, bgr_to_nv12, nv12_to_bgr, to_display_bgr
 from .composer import ComposeInfo, FrameComposer, RenderState
+from .effects import EffectChain, limit_opencv_threads
 
 __all__ = ["RenderStatus", "RenderEngine", "Pacer", "hires_timer"]
 
@@ -134,6 +135,7 @@ class RenderStatus:
     sink_name: str = "-"
     sink_device: str = ""
     virtual_output: bool = False
+    effects: str = "ninguno"
     error: str = ""
     warning: str = ""
 
@@ -161,6 +163,7 @@ class RenderEngine:
         self._external_sink = sink
 
         self.composer = FrameComposer(cfg.video, speaking, silent)
+        self.effects = EffectChain(cfg.effects)
         self.pacer = Pacer(cfg.video.fps)
 
         self._thread: threading.Thread | None = None
@@ -229,6 +232,9 @@ class RenderEngine:
     # ------------------------------------------------------------------ #
 
     def _run(self) -> None:
+        # Un solo hilo de OpenCV mientras rendericemos: a 640x480 no mejora el
+        # tiempo de pared y triplica la CPU consumida. Ver effects.RENDER_THREADS.
+        hilos_previos = limit_opencv_threads()
         with hires_timer(1):
             self.pacer.reset()
             self._publish(running=True, error="")
@@ -239,6 +245,7 @@ class RenderEngine:
             finally:
                 self._close_sink()
                 self._publish(running=False)
+                limit_opencv_threads(hilos_previos)
 
     def _tick(self) -> None:
         started = time.perf_counter()
@@ -252,6 +259,7 @@ class RenderEngine:
             voice = VoiceState.SILENT
 
         frame, info = self._compose(voice)
+        frame = self._apply_effects(frame)
         self._emit(frame)
         self._update_preview(frame, started)
 
@@ -289,6 +297,34 @@ class RenderEngine:
                 blended=False,
             )
             return self._last_good, info
+
+    # ------------------------------------------------------------------ #
+    # Efectos
+    # ------------------------------------------------------------------ #
+
+    def _apply_effects(self, frame: np.ndarray) -> np.ndarray:
+        """Aplica la cadena de efectos, convirtiendo de formato si hace falta.
+
+        Con el formato interno NV12 hay que ir y volver a BGR, porque un
+        desenfoque aplicado sobre el plano UV entrelazado mezclaría las
+        componentes U y V entre sí y produciría manchas de color. Son unos 2 ms
+        a 640x480, frente a los 66,7 ms de presupuesto a 15 FPS.
+
+        Si no hay ningún efecto activo no se convierte nada: se devuelve la
+        misma vista del `memmap` y el coste es cero.
+        """
+        if not self.effects.active:
+            return frame
+        try:
+            if self.cfg.video.pixel_format == "nv12":
+                bgr = nv12_to_bgr(frame)
+                return bgr_to_nv12(self.effects.apply(bgr))
+            return self.effects.apply(frame)
+        except Exception as exc:  # pragma: no cover - defensivo
+            # Un efecto mal parametrizado no debe cortar la emisión: mejor sale
+            # el fotograma sin efectos que no sale nada.
+            self._publish(warning=f"Se omitieron los efectos en este fotograma: {exc}")
+            return frame
 
     # ------------------------------------------------------------------ #
     # Salida
@@ -419,6 +455,7 @@ class RenderEngine:
             resyncs=self.pacer.resyncs,
             avg_frame_ms=avg,
             worst_frame_ms=worst,
+            effects=self.effects.describe(),
         )
 
     def _publish(self, **changes) -> None:

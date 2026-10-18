@@ -169,6 +169,56 @@ fuga real del ruido de medición**: hace falta la prueba de 30 minutos.
 
 ---
 
+## Medición 3 — 2026-10-18, coste de los efectos
+
+Mismo equipo. 60 s con desenfoque 45 %, grano 20 %, viñeta 30 % y saturación
+menos 25 %, alimentando la cámara virtual.
+
+### El camino de 76 % a 13,8 % de CPU
+
+| Versión | CPU (% de un núcleo) | Coste p95 | FPS |
+|---|---|---|---|
+| Primera implementación | **76,4 %** (p95 99,6 %) | 28,75 ms | 15,08 |
+| + desenfoque por reducción | 34,0 % (p95 54,2 %) | 7,48 ms | 15,11 |
+| + `setNumThreads(1)` | **13,8 %** (p95 18,8 %) | 8,02 ms | 15,10 |
+
+Sin efectos, para comparar: 10,7 % de un núcleo y 2,20 ms de p95.
+
+**El margen de FPS nunca se movió** (entre 15,04 y 15,11 en las tres versiones).
+Eso es lo que hace engañoso optimizar mirando solo la cadencia: el reloj
+absorbía los 28 ms y la salida se veía perfecta mientras el proceso consumía
+tres cuartos de un núcleo. La cifra que lo delata es la CPU, no los FPS.
+
+### Coste por efecto, aislado, 640x480
+
+| Efecto | ms/fotograma |
+|---|---|
+| Desenfoque 45 % | 2,40 |
+| Desenfoque 100 % | 1,22 |
+| Pixelado 60 % | 1,54 |
+| Saturación | 1,27 |
+| Viñeta 30 % | 1,14 |
+| Brillo + contraste | 0,65 |
+| Zoom 1,5x | 0,44 |
+| Grano 20 % | 0,42 |
+| **Todos juntos** | **5,60** |
+
+El desenfoque al 100 % cuesta **menos** que al 45 %: a mayor sigma, mayor es el
+factor de reducción previo y menos píxeles quedan por filtrar.
+
+### Sobre la deriva de memoria
+
+Las mediciones de 45 a 90 s dieron +0,36, +0,69, +1,17, +1,90 y +6,42 MB/min
+**con la misma configuración**. El método —ajuste por mínimos cuadrados
+extrapolado a un minuto— no resuelve el umbral de 1 MB/min en ventanas tan
+cortas.
+
+Se corrigió el informe para que declare **«no concluyente»** por debajo de
+5 minutos, en vez de dar un veredicto que cambia de signo entre repeticiones.
+Lo que decide CA-08 sigue siendo la prueba de 30 minutos.
+
+---
+
 ## Mediciones pendientes
 
 | Medición | Por qué hace falta |

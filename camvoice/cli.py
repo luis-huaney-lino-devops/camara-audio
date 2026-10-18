@@ -72,6 +72,15 @@ def _apply_overrides(cfg: AppConfig, args: argparse.Namespace) -> None:
         o.enabled = False
     if getattr(args, "backend", None):
         o.backend = args.backend
+    for campo in (
+        "blur", "pixelate", "brightness", "contrast",
+        "saturation", "vignette", "grain", "zoom",
+    ):
+        valor = getattr(args, campo, None)
+        if valor is not None:
+            setattr(cfg.effects, campo, float(valor))
+    if getattr(args, "no_effects", False):
+        cfg.effects.enabled = False
     if getattr(args, "metrics", False):
         m.enabled = True
     if getattr(args, "metrics_csv", None):
@@ -355,6 +364,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     session.start()
     started = time.perf_counter()
     label = f"{args.duration:.0f} s" if args.duration else "Ctrl+C para detener"
+    if session.engine is not None:
+        print(f"  efectos: {session.engine.effects.describe()}")
     print(f"\nEn marcha ({label}).\n")
 
     try:
@@ -465,7 +476,16 @@ def cmd_bench(args: argparse.Namespace) -> int:
             f"{summary.cpu_mean:.1f} % de un núcleo (p95 {summary.cpu_p95:.1f} %) = "
             f"{summary.cpu_norm_mean:.1f} % de la máquina",
         ),
-        ("Memoria estable", summary.memory_stable, f"{summary.rss_slope_mb_per_min:+.2f} MB/min"),
+        (
+            "Memoria",
+            summary.memory_stable,
+            f"{summary.rss_slope_mb_per_min:+.2f} MB/min -> {summary.memory_verdict}"
+            + (
+                "; repite con --duration 1800 para decidir CA-08"
+                if summary.memory_verdict == "no concluyente"
+                else ""
+            ),
+        ),
     ]
     for name, ok, detail in verdicts:
         print(f"  {OK if ok else FAIL} {name:<22}{detail}")
@@ -616,6 +636,23 @@ def _add_audio_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--release", type=int, metavar="MS", help="Silencio necesario para desactivar.")
 
 
+def _add_effect_args(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group(
+        "efectos",
+        "Porcentajes independientes de la resolución: el 60 % se ve igual a "
+        "320x240 que a 720p. Se aplican sobre el fotograma de salida.",
+    )
+    g.add_argument("--blur", type=float, metavar="PCT", help="Desenfoque, 0-100.")
+    g.add_argument("--pixelate", type=float, metavar="PCT", help="Pixelado, 0-100.")
+    g.add_argument("--brightness", type=float, metavar="PCT", help="Brillo, -100 a 100.")
+    g.add_argument("--contrast", type=float, metavar="PCT", help="Contraste, -100 a 100.")
+    g.add_argument("--saturation", type=float, metavar="PCT", help="Saturación, -100 a 100.")
+    g.add_argument("--vignette", type=float, metavar="PCT", help="Viñeta, 0-100.")
+    g.add_argument("--grain", type=float, metavar="PCT", help="Grano, 0-100.")
+    g.add_argument("--zoom", type=float, metavar="X", help="Zoom, 1.0 a 4.0.")
+    g.add_argument("--no-effects", action="store_true", help="Desactiva la cadena.")
+
+
 def _add_output_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-virtual-cam", action="store_true", help="No abrir la cámara virtual.")
     p.add_argument("--backend", help="Backend de pyvirtualcam (obs, unitycapture).")
@@ -648,6 +685,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("gui", help="Abre la interfaz gráfica (acción por defecto).")
     _add_clip_args(p)
     _add_audio_args(p)
+    _add_effect_args(p)
     _add_output_args(p)
     p.set_defaults(func=cmd_gui)
 
@@ -685,6 +723,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("run", help="Ejecuta sin interfaz gráfica.")
     _add_clip_args(p)
     _add_audio_args(p)
+    _add_effect_args(p)
     _add_output_args(p)
     p.add_argument("--duration", type=float, default=0.0, metavar="S", help="0 = indefinido.")
     p.add_argument("--quiet", action="store_true", help="Sin línea de estado continua.")
@@ -693,6 +732,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("bench", help="Mide CPU, memoria y FPS durante un periodo.")
     _add_clip_args(p)
     _add_audio_args(p)
+    _add_effect_args(p)
     _add_output_args(p)
     p.add_argument("--duration", type=float, default=120.0, metavar="S")
     p.set_defaults(func=cmd_bench)

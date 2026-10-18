@@ -280,12 +280,37 @@ decirlo:
 | En caliente | Requiere volver a iniciar |
 |---|---|
 | Micrófono, sensibilidad y todos los tiempos del detector | Archivos de los clips |
+| **Todos los efectos** (desenfoque, pixelado, color, zoom, grano, viñeta) | — |
 | Transición, velocidades, modo de bucle | Resolución, FPS |
 | Activar/desactivar la cámara virtual | Encuadre, espejo |
 
 Los controles del segundo grupo invalidan la caché de fotogramas, así que la UI
 los **deshabilita mientras la sesión corre** y lo explica, en vez de aceptar el
 cambio y no aplicarlo.
+
+#### 2.5.1. Añadido en la v2: efectos sobre la salida
+
+La interfaz se organiza en cinco pestañas —Videos, Micrófono, Detector, Efectos
+y Salida— porque el panel único obligaba a desplazarse y con los efectos no
+cabría.
+
+La pestaña **Efectos** añade, todo ajustable en vivo y sin volver a preparar la
+caché: desenfoque, pixelado, brillo, contraste, saturación, zoom, grano, viñeta
+y espejo. Los valores son **porcentajes derivados del ancho del fotograma**, no
+píxeles absolutos, de modo que el mismo ajuste se ve igual en cualquier
+resolución. Hay preajustes porque nueve deslizadores a cero no sugieren qué
+hacer con ellos.
+
+Las resoluciones ofrecidas pasan de cuatro a nueve (320x240 a 1920x1080) y las
+cadencias a siete (10 a 30 FPS).
+
+Lo instructivo de esta función fue el rendimiento: la primera implementación
+consumía **76 % de un núcleo**, cuatro veces el objetivo, **sin que los FPS se
+movieran** —el reloj absorbía los 28 ms por fotograma y la salida se veía
+perfecta—. Tres optimizaciones lo bajaron a **13,8 %**, y la más instructiva fue
+limitar OpenCV a un hilo: a 640x480 su paralelización no mejora el tiempo de
+pared y triplica la CPU consumida. Detalle en `docs/ARQUITECTURA.md` §4.5 y
+`docs/METRICS.md` §Medición 3.
 
 La aplicación no necesita cuentas, autenticación, backend, base de datos ni
 servicios en la nube.
@@ -621,7 +646,7 @@ procedimiento de prueba de la cámara virtual.
 | CA-07 Salida virtual | Cámara propia registrada y alimentada, sin OBS | Prueba manual en aplicación receptora (Teams/Zoom/Chrome) |
 | CA-08 Continuidad 30 min | Instrumentado | Ejecutar la prueba de 30 min |
 | CA-09 Rendimiento | **Medido en un Core i5-10300H con Intel UHD integrada**, que es el perfil de referencia | Repetir con duración de 30 min |
-| CA-10 Resolución y FPS | Verificado | — |
+| CA-10 Resolución y FPS | Verificado: 9 resoluciones y 7 cadencias | — |
 | CA-11 Interfaz | Implementado | Recorrido manual |
 | CA-12 Recuperación | Verificado (automatizado) | Desconexión física del micrófono |
 | CA-13 Distribución | Especificado | Generar y probar el ejecutable |
@@ -682,6 +707,12 @@ Lo que se añadió, y el problema concreto que evita:
 11. **Recomendaciones de grabación** ([§2.1](#21-configuración-inicial)). La
     calidad depende más de los clips que del código, y el software no puede
     suplirlo.
+
+13. **Cadena de efectos y UI por pestañas**
+    ([§2.5.1](#251-añadido-en-la-v2-efectos-sobre-la-salida)). La v1 no
+    contemplaba efectos. Se añadieron nueve, ajustables en vivo y con
+    parámetros independientes de la resolución, más preajustes. El coste tuvo
+    que optimizarse 5,5 veces para caber en el objetivo de CPU.
 
 12. **Cámara virtual independiente de OBS** ([§2.4](#24-cámara-virtual)). La v1
     proponía OBS Virtual Camera «como primera implementación» y la aplicación
