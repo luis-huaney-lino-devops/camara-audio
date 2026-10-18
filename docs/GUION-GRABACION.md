@@ -7,6 +7,10 @@ del programa.**
 > La aplicación trae un **grabador con temporizador** que muestra estas señales
 > en pantalla y para solo: pestaña **Grabar**. Este documento es la referencia;
 > el grabador es la versión práctica.
+>
+> El texto no sale de golpe: aparece **una frase cada vez**, con el tiempo
+> repartido según su longitud, y debajo se ve atenuada la frase siguiente para
+> poder anticiparla. La cuenta atrás es configurable de 0 a 15 s.
 
 ---
 
@@ -53,6 +57,10 @@ Con boca cerrada al principio y apertura natural después, el arranque se ve
 exactamente como empezar a hablar de verdad.
 
 ### Qué texto leer
+
+En el grabador el texto va saliendo por frases, con su tiempo de lectura
+repartido. Para un clip de 15 s quedan cuatro frases de entre 2,5 y 4,1 s: más
+que suficiente para leer cada una mirando al objetivo sin ir a trompicones.
 
 El contenido es irrelevante **salvo en dos cosas**: la distribución de sonidos y
 que no se pueda leer en los labios.

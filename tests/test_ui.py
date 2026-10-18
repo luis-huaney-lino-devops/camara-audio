@@ -331,3 +331,74 @@ def test_el_boton_de_reinicio_vuelve_al_valor_por_defecto(qt_app):
     s.set_value(80)
     s._reset.click()
     assert s.value() == pytest.approx(25)
+
+
+# --------------------------------------------------------------------------- #
+# Pestana Grabar: maquetacion y cronometro
+# --------------------------------------------------------------------------- #
+
+
+def test_la_maquetacion_no_se_mueve_con_el_texto_del_guion(window, qt_app):
+    """Visto en una captura real: el texto largo del guion empujaba el resto de
+    la pagina hasta recortar los botones por la derecha. El bloque del guion
+    tiene altura fija justamente para eso."""
+    window.resize(1180, 780)
+    window.show()
+    qt_app.processEvents()
+    window.tabs.setCurrentIndex(1)
+    qt_app.processEvents()
+
+    rec = window.recorder_tab
+    plan = rec._current_plan()
+
+    def geometrias():
+        return (
+            rec.record_button.geometry(),
+            rec.cancel_button.geometry(),
+            rec.progress.geometry(),
+        )
+
+    base = geometrias()
+    for cue in plan.cues():
+        rec.cue_title.setText(cue.title)
+        rec.cue_detail.setText(cue.detail)
+        siguiente = plan.next_cue_at(cue.start_s + 0.01)
+        rec.cue_next.setText(siguiente.detail if siguiente else "")
+        qt_app.processEvents()
+        assert geometrias() == base, f"la maquetacion se movio con: {cue.detail[:40]!r}"
+
+
+def test_los_botones_caben_en_el_panel(window, qt_app):
+    """Sin esto, «Cancelar» quedaba recortado fuera de la vista."""
+    window.resize(1180, 780)
+    window.show()
+    qt_app.processEvents()
+    window.tabs.setCurrentIndex(1)
+    qt_app.processEvents()
+
+    rec = window.recorder_tab
+    assert rec.cancel_button.geometry().right() <= rec.width()
+    assert rec.record_button.geometry().left() >= 0
+
+
+def test_la_cuenta_atras_es_configurable(window):
+    rec = window.recorder_tab
+    assert rec.countdown.slider.minimum() == 0
+    assert rec.countdown.slider.maximum() >= 10
+    rec.countdown.set_value(8)
+    assert rec.countdown.value() == pytest.approx(8)
+
+
+def test_cambiar_la_duracion_reparte_el_guion_de_nuevo(window):
+    rec = window.recorder_tab
+    rec.duration.set_value(8)
+    pocas = len(rec._current_plan().reading_phrases())
+    rec.duration.set_value(22)
+    muchas = len(rec._current_plan().reading_phrases())
+    assert pocas < muchas
+
+
+def test_el_clip_de_silencio_no_muestra_frases(window):
+    rec = window.recorder_tab
+    rec.kind_combo.setCurrentIndex(1)
+    assert rec._current_plan().reading_phrases() == []

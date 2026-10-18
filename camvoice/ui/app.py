@@ -270,6 +270,10 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        # Sin desplazamiento horizontal: el contenido se ajusta al ancho del
+        # panel. Si no, una etiqueta larga ensancha la página y los botones de
+        # la derecha quedan recortados fuera de la vista.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(contenido)
         return scroll
 

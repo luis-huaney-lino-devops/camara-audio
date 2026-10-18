@@ -58,9 +58,16 @@ pantalla mientras graba. **Para sola** al cumplirse el tiempo.
 
 ```
  0.0 - 0.6 s   BOCA CERRADA, mira al objetivo
- 0.6 - 13.5 s  Lee en voz alta  (trae el texto en pantalla)
+ 0.6 - 3.8 s   "Esta mañana el tiempo parece bastante bueno,"
+ 3.8 - 6.3 s   "aunque por la tarde puede cambiar."
+ 6.3 - 9.4 s   "Me faltan algunos papeles para el informe,"
+ 9.4 - 13.5 s  "pero podemos verlo con calma y confirmar la fecha final."
 13.5 - 15.0 s  Termina la frase y CIERRA LA BOCA
 ```
+
+El texto sale **una frase cada vez**, con el tiempo repartido según su longitud,
+y debajo se ve atenuada la siguiente para poder anticiparla. La cuenta atrás es
+configurable de 0 a 15 s.
 
 El medio segundo inicial no es decorativo: es el fotograma al que se rebobina el
 clip de habla tras cada silencio. Si ahí tienes la boca a medio abrir, cada vez
@@ -184,7 +191,7 @@ repetirlo en el Core i5 de referencia y durante 30 minutos.
 ## Pruebas
 
 ```bash
-pytest          # 284 pruebas, ~18 s, sin micrófono ni cámara
+pytest          # 301 pruebas, ~18 s, sin micrófono ni cámara
 ```
 
 Procedimiento completo, incluidas las pruebas manuales, en

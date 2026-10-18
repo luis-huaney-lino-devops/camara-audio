@@ -12,7 +12,7 @@ actual está en `plan.md` §8 y los resultados de rendimiento en `METRICS.md`.
 ## 1. Pruebas automatizadas
 
 ```
-pytest                    # 284 pruebas, ~18 s
+pytest                    # 301 pruebas, ~18 s
 pytest -v                 # con el nombre de cada caso
 pytest tests/test_gate.py # solo la histéresis
 ```
@@ -134,7 +134,11 @@ Requiere una webcam.
 3. Comprueba:
    - [ ] Aparecen las guías de encuadre (eje central, línea de ojos, marco).
    - [ ] Cuenta atrás de 3 s con la señal «BOCA CERRADA» destacada.
-   - [ ] Las señales cambian en los tiempos del guion.
+   - [ ] El texto sale **una frase cada vez**, no el párrafo entero.
+   - [ ] Debajo se ve atenuada la frase siguiente.
+   - [ ] **Nada se mueve de sitio** al cambiar de frase: los botones y la
+         barra de progreso se quedan donde estaban.
+   - [ ] La cuenta atrás respeta el valor del deslizador.
    - [ ] **Para sola** a los 15 s.
    - [ ] El archivo resultante **dura 15 s al reproducirlo**, no menos. Si dura
          menos, la cadencia escrita no coincide con la real.

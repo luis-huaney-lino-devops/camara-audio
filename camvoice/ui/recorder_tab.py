@@ -43,6 +43,22 @@ from .widgets import Card, PercentSlider, combo, labelled_row
 __all__ = ["RecorderTab"]
 
 
+def _no_impone_ancho(etiqueta: QLabel) -> QLabel:
+    """Hace que la etiqueta no dicte el ancho de su contenedor.
+
+    Una QLabel con ajuste de línea y altura fija pide tanta anchura como haga
+    falta para que el texto quepa en ese alto. Si el texto cambia —como el del
+    guion, que cambia en cada frase— el panel entero se ensancha y se encoge, y
+    las demás etiquetas vuelven a fluir con otro número de líneas. Con la
+    política horizontal en `Ignored`, el diseño reparte el ancho y la etiqueta
+    se adapta, nunca al revés.
+    """
+    etiqueta.setSizePolicy(QSizePolicy.Ignored, etiqueta.sizePolicy().verticalPolicy())
+    etiqueta.setMinimumWidth(0)
+    return etiqueta
+
+
+
 class RecorderTab(QWidget):
     """Graba los dos clips sin salir de la aplicación."""
 
@@ -84,6 +100,7 @@ class RecorderTab(QWidget):
             "grabar desde ella crearía un bucle."
         )
         nota.setWordWrap(True)
+        _no_impone_ancho(nota)
         nota.setObjectName("dim")
         fuente.add(nota)
         raiz.addWidget(fuente)
@@ -91,7 +108,8 @@ class RecorderTab(QWidget):
         # --- vista previa ---------------------------------------------- #
         self.preview = QLabel("Pulsa «Buscar» para elegir la cámara.")
         self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumHeight(240)
+        self.preview.setMinimumHeight(220)
+        self.preview.setMinimumWidth(120)
         self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview.setStyleSheet(
             "background:#0c0e11; color:#6e7681;"
@@ -100,19 +118,40 @@ class RecorderTab(QWidget):
         raiz.addWidget(self.preview, 1)
 
         # --- señal del guion ------------------------------------------- #
-        self.cue_title = QLabel("—")
-        self.cue_title.setAlignment(Qt.AlignCenter)
-        self.cue_title.setWordWrap(True)
-        self.cue_title.setMinimumHeight(44)
-        self._style_cue(False)
-        raiz.addWidget(self.cue_title)
+        #
+        # Altura FIJA en los tres elementos. El texto del guion cambia de
+        # longitud en cada frase, y si el bloque pudiera crecer empujaría los
+        # botones fuera del panel cada vez que saliera una frase larga. Con
+        # altura fija la maquetación no se mueve en toda la grabación.
+        guion = QWidget()
+        guion.setFixedHeight(168)
+        caja = QVBoxLayout(guion)
+        caja.setContentsMargins(0, 0, 0, 0)
+        caja.setSpacing(6)
 
-        self.cue_detail = QLabel()
+        self.cue_title = _no_impone_ancho(QLabel("—"))
+        self.cue_title.setAlignment(Qt.AlignCenter)
+        self.cue_title.setFixedHeight(40)
+        self._style_cue(False)
+        caja.addWidget(self.cue_title)
+
+        self.cue_detail = _no_impone_ancho(QLabel())
         self.cue_detail.setAlignment(Qt.AlignCenter)
         self.cue_detail.setWordWrap(True)
-        self.cue_detail.setObjectName("dim")
-        self.cue_detail.setMinimumHeight(40)
-        raiz.addWidget(self.cue_detail)
+        self.cue_detail.setFixedHeight(76)
+        self.cue_detail.setStyleSheet(
+            "font-size:17px; color:#e6edf3; padding:4px 10px;"
+        )
+        caja.addWidget(self.cue_detail)
+
+        self.cue_next = _no_impone_ancho(QLabel())
+        self.cue_next.setAlignment(Qt.AlignCenter)
+        self.cue_next.setWordWrap(True)
+        self.cue_next.setFixedHeight(38)
+        self.cue_next.setStyleSheet("font-size:12px; color:#6e7681;")
+        caja.addWidget(self.cue_next)
+
+        raiz.addWidget(guion)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -136,7 +175,15 @@ class RecorderTab(QWidget):
         self.duration.bind(lambda _v: self._on_kind_changed())
         ajustes.add(self.duration)
 
-        self.checklist = QLabel()
+        self.countdown = PercentSlider(
+            "Cuenta atrás", minimo=0, maximo=15, defecto=3, sufijo=" s",
+            ayuda="Tiempo para colocarte antes de que empiece a grabar. "
+            "A 0 empieza en cuanto pulsas, pero siempre se observa al menos un "
+            "segundo para medir la cadencia real de la cámara.",
+        )
+        ajustes.add(self.countdown)
+
+        self.checklist = _no_impone_ancho(QLabel())
         self.checklist.setWordWrap(True)
         self.checklist.setStyleSheet("color:#8b949e; font-size:11px;")
         ajustes.add(self.checklist)
@@ -164,6 +211,7 @@ class RecorderTab(QWidget):
             "aplicación nunca lo usa."
         )
         ayuda.setWordWrap(True)
+        _no_impone_ancho(ayuda)
         ayuda.setObjectName("dim")
         raiz.addWidget(ayuda)
 
@@ -191,7 +239,11 @@ class RecorderTab(QWidget):
             primera = self._plan.cues()[0]
             self.cue_title.setText(primera.title)
             self.cue_detail.setText(primera.detail)
+            self.cue_next.setText("")
             self._style_cue(True)
+            frases = self._plan.reading_phrases()
+            if frases:
+                self.cue_next.setText(f"el guion saldrá en {len(frases)} frases")
 
     # ------------------------------------------------------------------ #
 
@@ -234,7 +286,9 @@ class RecorderTab(QWidget):
         if not ruta:
             return
 
-        self._recorder = ClipRecorder(camara, self._plan, Path(ruta))
+        self._recorder = ClipRecorder(
+            camara, self._plan, Path(ruta), countdown_s=self.countdown.value()
+        )
         self._recorder.start()
         self.record_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
@@ -265,8 +319,10 @@ class RecorderTab(QWidget):
             self._show_frame(frame, guias=estado.phase != "recording")
 
         if estado.phase == "countdown":
-            self.cue_title.setText(f"{estado.countdown_s:.0f}…   {estado.cue_title}")
+            restante = max(1, int(estado.countdown_s + 0.999))
+            self.cue_title.setText(f"{restante}…   {estado.cue_title}")
             self.cue_detail.setText(estado.cue_detail)
+            self.cue_next.setText("")
             self._style_cue(True)
             self.progress.setValue(0)
             self.progress.setFormat("preparado…")
@@ -275,11 +331,21 @@ class RecorderTab(QWidget):
             self.cue_title.setText(estado.cue_title)
             self.cue_detail.setText(estado.cue_detail)
             self._style_cue(estado.cue_critical)
+
+            # La frase siguiente, atenuada: permite anticiparla sin tener que
+            # leerla a toda prisa cuando aparece.
+            siguiente = self._plan.next_cue_at(estado.elapsed_s)
+            if siguiente is not None and siguiente.detail:
+                self.cue_next.setText(f"luego:  {siguiente.detail}")
+            else:
+                self.cue_next.setText("")
+
             fraccion = estado.elapsed_s / max(0.1, self._plan.duration_s)
             self.progress.setValue(int(min(1.0, fraccion) * 1000))
             self.progress.setFormat(f"{estado.remaining_s:.1f} s restantes")
 
         elif estado.phase == "done":
+            self.cue_next.setText("")
             self.cue_title.setText("Grabación terminada")
             self.cue_detail.setText(
                 f"{estado.frames} fotogramas en {estado.elapsed_s:.1f} s "
@@ -294,6 +360,7 @@ class RecorderTab(QWidget):
             self._offer_use(Path(ruta), kind, estado.measured_fps)
 
         elif estado.phase == "error":
+            self.cue_next.setText("")
             self.cue_title.setText("Error")
             self.cue_detail.setText(estado.error)
             self._style_cue(True)

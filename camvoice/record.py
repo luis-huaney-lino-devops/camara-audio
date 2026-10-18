@@ -19,6 +19,7 @@ busque por qué su clip "no tiene sonido".
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -39,6 +40,8 @@ __all__ = [
     "SILENT_PLAN",
     "READING_TEXT",
     "READING_TEXT_LONG",
+    "split_phrases",
+    "MIN_SEGMENT_S",
 ]
 
 
@@ -76,6 +79,50 @@ READING_TEXT_LONG = (
     + " Si te parece, lo dejamos preparado y mañana lo revisamos juntos sin prisa."
 )
 """Versión para clips de 20 s."""
+
+
+MIN_SEGMENT_S = 1.6
+"""Tiempo mínimo que una frase permanece en pantalla.
+
+Por debajo de esto no da tiempo a leerla mientras se mira al objetivo. Si el
+reparto proporcional dejara frases más cortas, se agrupan de dos en dos.
+"""
+
+
+def split_phrases(texto: str) -> list[str]:
+    """Parte un texto por su puntuación, conservando los signos.
+
+    Se corta donde el hablante haría una pausa natural —coma, punto, punto y
+    coma— porque son exactamente los puntos donde se puede cambiar lo que hay
+    en pantalla sin interrumpir la lectura.
+    """
+    if not texto.strip():
+        return []
+    crudas = re.split(r"(?<=[,;.:])\s+", texto.strip())
+    frases = [f.strip() for f in crudas if f.strip()]
+
+    # Un fragmento de tres palabras no merece su propio turno en pantalla.
+    # Se pega al vecino, pero **nunca cruzando un punto**: unir el final de una
+    # oración con el principio de la siguiente produce frases que se leen mal
+    # («...la fecha final. Si te parece,»).
+    unidas: list[str] = []
+    pendiente = ""
+    for frase in frases:
+        frase = f"{pendiente} {frase}".strip() if pendiente else frase
+        pendiente = ""
+        if len(frase.split()) >= 4:
+            unidas.append(frase)
+        elif unidas and not unidas[-1].rstrip().endswith("."):
+            unidas[-1] = f"{unidas[-1]} {frase}"
+        else:
+            # Corto y tras un punto: espera a juntarse con lo que venga.
+            pendiente = frase
+    if pendiente:
+        if unidas:
+            unidas[-1] = f"{unidas[-1]} {pendiente}"
+        else:
+            unidas.append(pendiente)
+    return unidas
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,13 +163,16 @@ class RecordingPlan:
         fin_lead = self.lead_in_s
         inicio_cola = max(fin_lead, self.duration_s - self.tail_s)
 
+        apertura = Cue(
+            0.0,
+            fin_lead,
+            "BOCA CERRADA, mira al objetivo",
+            "Este es el fotograma al que se vuelve tras cada silencio.",
+            critical=True,
+        )
+
         if self.kind == "speaking":
-            centro = Cue(
-                fin_lead,
-                inicio_cola,
-                "Lee en voz alta, a ritmo normal",
-                self.reading_text,
-            )
+            centro = self._reading_cues(fin_lead, inicio_cola)
             cola = Cue(
                 inicio_cola,
                 self.duration_s,
@@ -131,13 +181,15 @@ class RecordingPlan:
                 critical=True,
             )
         else:
-            centro = Cue(
-                fin_lead,
-                inicio_cola,
-                "Escucha. Parpadea con naturalidad",
-                "Boca cerrada, mandíbula relajada. Quieto pero vivo: "
-                "ni inmóvil ni inquieto.",
-            )
+            centro = [
+                Cue(
+                    fin_lead,
+                    inicio_cola,
+                    "Escucha. Parpadea con naturalidad",
+                    "Boca cerrada, mandíbula relajada. Quieto pero vivo: "
+                    "ni inmóvil ni inquieto.",
+                )
+            ]
             cola = Cue(
                 inicio_cola,
                 self.duration_s,
@@ -145,17 +197,68 @@ class RecordingPlan:
                 "Sin bostezos, sin estirarte, sin tocarte la cara.",
             )
 
+        return [apertura, *centro, cola]
+
+    def _reading_cues(self, inicio: float, fin: float) -> list[Cue]:
+        """Divide el texto en frases y reparte la ventana de lectura entre ellas.
+
+        Mostrar el párrafo entero de golpe no sirve: hay que buscar por dónde se
+        iba mientras se habla a cámara. Aquí sale **una frase cada vez**, con el
+        tiempo proporcional a su longitud, de modo que el ritmo de la pantalla
+        marque el ritmo de lectura.
+
+        El reparto es por número de caracteres, que para un texto en un solo
+        idioma y sin cifras es un proxy suficientemente bueno de la duración
+        hablada. No hace falta más: lo que importa es que ninguna frase se quede
+        corta de tiempo, no clavar la sílaba.
+        """
+        ventana = max(0.0, fin - inicio)
+        frases = split_phrases(self.reading_text)
+        if not frases or ventana <= 0:
+            return [
+                Cue(inicio, fin, "Lee en voz alta, a ritmo normal", self.reading_text)
+            ]
+
+        # Con poco tiempo, menos frases pero legibles: se agrupan hasta que cada
+        # una tenga al menos MIN_SEGMENT_S. Mejor leer tres frases con calma que
+        # ver seis pasar sin poder seguirlas.
+        while len(frases) > 1 and ventana / len(frases) < MIN_SEGMENT_S:
+            frases = [
+                " ".join(frases[i : i + 2]) for i in range(0, len(frases), 2)
+            ]
+
+        total = sum(len(f) for f in frases) or 1
+        cues: list[Cue] = []
+        t = inicio
+        for indice, frase in enumerate(frases, start=1):
+            ultimo = indice == len(frases)
+            t_fin = fin if ultimo else t + ventana * len(frase) / total
+            cues.append(
+                Cue(
+                    t,
+                    t_fin,
+                    f"Lee en voz alta  ·  {indice} de {len(frases)}",
+                    frase,
+                )
+            )
+            t = t_fin
+        return cues
+
+    def reading_phrases(self) -> list[str]:
+        """Frases del texto de lectura, en el orden en que se mostrarán."""
         return [
-            Cue(
-                0.0,
-                fin_lead,
-                "BOCA CERRADA, mira al objetivo",
-                "Este es el fotograma al que se vuelve tras cada silencio.",
-                critical=True,
-            ),
-            centro,
-            cola,
+            c.detail
+            for c in self.cues()
+            if c.title.startswith("Lee en voz alta")
         ]
+
+    def next_cue_at(self, t: float) -> Cue | None:
+        """Señal siguiente a la activa, para poder anticiparla en pantalla."""
+        cues = self.cues()
+        for actual, siguiente in zip(cues, cues[1:]):
+            if actual.contains(t):
+                return siguiente
+        return None
 
     def cue_at(self, t: float) -> Cue:
         """Señal activa en el instante `t`."""

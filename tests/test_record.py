@@ -377,3 +377,106 @@ def test_una_medicion_absurda_se_descarta(tmp_path, absurda):
     g = _grabador(tmp_path, 30.0)
     g._measured_input_fps = absurda
     assert g._writer_fps() == pytest.approx(30.0)
+
+
+# --------------------------------------------------------------------------- #
+# El guion sale por frases
+# --------------------------------------------------------------------------- #
+
+
+def test_el_texto_se_parte_por_la_puntuacion():
+    frases = __import__("camvoice.record", fromlist=["x"]).split_phrases(READING_TEXT)
+    assert len(frases) >= 3
+    assert all(f.strip() for f in frases)
+    # Nada se pierde por el camino.
+    assert sum(len(f.split()) for f in frases) == len(READING_TEXT.split())
+
+
+def test_las_frases_cortas_no_cruzan_un_punto():
+    """Unir el final de una oracion con el principio de la siguiente produce
+    frases que se leen mal: «...la fecha final. Si te parece,»."""
+    from camvoice.record import split_phrases
+
+    for frase in split_phrases(READING_TEXT_LONG):
+        interior = frase[:-1] if frase.endswith(".") else frase
+        assert "." not in interior, f"una frase cruza un punto: {frase!r}"
+
+
+def test_un_fragmento_de_tres_palabras_no_tiene_turno_propio():
+    from camvoice.record import split_phrases
+
+    frases = split_phrases("Primera frase bastante larga de prueba, si, y otra mas larga aun.")
+    assert all(len(f.split()) >= 4 for f in frases)
+
+
+def test_el_guion_de_habla_sale_en_varias_frases():
+    """Mostrar el parrafo entero de golpe obliga a buscar por donde se iba."""
+    frases = SPEAKING_PLAN.reading_phrases()
+    assert len(frases) >= 3
+    assert all(frases)
+
+
+def test_cada_frase_tiene_tiempo_suficiente_para_leerse():
+    from camvoice.record import MIN_SEGMENT_S
+
+    for duracion in (8.0, 12.0, 15.0, 20.0, 25.0):
+        plan = SPEAKING_PLAN.with_duration(duracion)
+        lecturas = [c for c in plan.cues() if c.title.startswith("Lee en voz alta")]
+        for cue in lecturas:
+            ventana = cue.end_s - cue.start_s
+            assert ventana >= MIN_SEGMENT_S * 0.9, (
+                f"{duracion}s: la frase {cue.detail[:30]!r} solo dura {ventana:.1f}s"
+            )
+
+
+def test_con_poco_tiempo_hay_menos_frases_pero_legibles():
+    """Mejor leer dos frases con calma que ver seis pasar sin poder seguirlas."""
+    cortas = len(SPEAKING_PLAN.with_duration(8.0).reading_phrases())
+    largas = len(SPEAKING_PLAN.with_duration(20.0).reading_phrases())
+    assert cortas < largas
+
+
+def test_el_tiempo_de_cada_frase_es_proporcional_a_su_longitud():
+    plan = SPEAKING_PLAN.with_duration(15.0)
+    lecturas = [c for c in plan.cues() if c.title.startswith("Lee en voz alta")]
+    mas_larga = max(lecturas, key=lambda c: len(c.detail))
+    mas_corta = min(lecturas, key=lambda c: len(c.detail))
+    assert (mas_larga.end_s - mas_larga.start_s) > (mas_corta.end_s - mas_corta.start_s)
+
+
+def test_las_frases_se_numeran_para_saber_cuantas_quedan():
+    plan = SPEAKING_PLAN.with_duration(15.0)
+    titulos = [c.title for c in plan.cues() if c.title.startswith("Lee en voz alta")]
+    assert "1 de" in titulos[0]
+    assert str(len(titulos)) in titulos[-1]
+
+
+def test_el_clip_de_silencio_no_se_parte_en_frases():
+    assert SILENT_PLAN.reading_phrases() == []
+
+
+def test_la_siguiente_senal_permite_anticiparla():
+    plan = SPEAKING_PLAN.with_duration(15.0)
+    primera = plan.cues()[0]
+    siguiente = plan.next_cue_at(primera.start_s + 0.1)
+    assert siguiente is not None
+    assert siguiente.title.startswith("Lee en voz alta")
+
+
+def test_al_final_no_hay_siguiente():
+    plan = SPEAKING_PLAN.with_duration(15.0)
+    assert plan.next_cue_at(plan.duration_s - 0.01) is None
+
+
+def test_un_texto_vacio_no_rompe_el_guion():
+    from camvoice.record import split_phrases
+
+    assert split_phrases("") == []
+    assert split_phrases("   ") == []
+    vacio = SPEAKING_PLAN.with_duration(15.0).__class__(
+        name="X", kind="speaking", duration_s=10.0, lead_in_s=0.6,
+        tail_s=1.0, reading_text="",
+    )
+    cues = vacio.cues()
+    assert cues[0].start_s == 0.0
+    assert cues[-1].end_s == pytest.approx(10.0)
