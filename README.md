@@ -13,6 +13,21 @@ dos estados y se descarta; no se graba ni se envía a ninguna parte.
 
 ## Empezar
 
+### Solo quiero probarlo
+
+Descarga **[camvoice-win64.zip](https://github.com/luis-huaney-lino-devops/camara-audio/releases/latest)**
+(96 MB, Windows x64, autocontenido), descomprime y en `instalacion\`:
+
+```
+INSTALAR.bat     -> acepta el aviso de Windows (UAC), una sola vez
+PROBAR.bat       -> abre el navegador y verás la imagen moverse con tu voz
+```
+
+No necesita OBS, ni Python, ni drivers, ni Internet. Requisitos completos en
+[docs/REQUISITOS.md](docs/REQUISITOS.md).
+
+### Desde el código
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate

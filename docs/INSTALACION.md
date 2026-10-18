@@ -50,7 +50,14 @@ con la configuración por defecto se prefiere el propio.
 
 **El ejecutable no se versiona en el repositorio.** Son 227 MB de contenido
 derivado (Qt, OpenCV, NumPy y el intérprete de Python empaquetados), y un
-repositorio de código no es el sitio para eso. Hay dos formas de conseguirlo.
+repositorio de código no es el sitio para eso. Hay tres formas de conseguirlo.
+
+### 2.0. Descargarlo ya compilado (lo más rápido)
+
+**<https://github.com/luis-huaney-lino-devops/camara-audio/releases/latest>**
+
+Archivo: `camvoice-win64.zip`, 96 MB. Lleva dentro los dos ejecutables, los
+scripts de `instalacion\` y el filtro de cámara. Descomprime y ve al §2.3.
 
 ### 2.1. Si ya lo tienes compilado
 
