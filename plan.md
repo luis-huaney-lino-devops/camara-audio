@@ -312,6 +312,31 @@ limitar OpenCV a un hilo: a 640x480 su paralelización no mejora el tiempo de
 pared y triplica la CPU consumida. Detalle en `docs/ARQUITECTURA.md` §4.5 y
 `docs/METRICS.md` §Medición 3.
 
+#### 2.5.2. Añadido en la v2: grabador guiado y segundo plano
+
+**Grabador con temporizador** (pestaña Grabar). El plan daba las condiciones de
+grabación como recomendaciones en un documento. Ahora el programa las impone:
+guías de encuadre sobre la vista previa, cuenta atrás, señales del guion en
+pantalla con sus tiempos, y parada automática. El guion es datos
+(`RecordingPlan`), así que se verifica entero sin cámara.
+
+Dos fallos que solo aparecieron al probarlo con una webcam real:
+
+* **La cadencia declarada miente.** Una cámara que anuncia 30 FPS entregaba 10
+  con poca luz. Escribiendo 30 en la cabecera, un clip de 5 s quedaba de 1,7 s y
+  se reproducía al triple de velocidad. Ahora se mide durante la cuenta atrás.
+* **Nuestra propia cámara virtual se ofrecía como fuente**, lo que habría creado
+  un bucle. Se detecta ahora por comportamiento: dos fotogramas separados
+  250 ms que sean idénticos bit a bit delatan una imagen de relleno congelada,
+  porque un sensor real nunca repite un fotograma.
+
+**Segundo plano** (casilla en Salida). Al cerrar la ventana la aplicación sigue
+en el área de notificación, con un icono que cambia de color según el estado del
+detector. Es minimización a bandeja estándar, no evasión: el proceso sigue
+visible en el Administrador de tareas y el nombre de la cámara sigue en la lista
+del programa de videollamada. La documentación lo dice explícitamente para no
+dar una falsa sensación de invisibilidad.
+
 La aplicación no necesita cuentas, autenticación, backend, base de datos ni
 servicios en la nube.
 
@@ -707,6 +732,12 @@ Lo que se añadió, y el problema concreto que evita:
 11. **Recomendaciones de grabación** ([§2.1](#21-configuración-inicial)). La
     calidad depende más de los clips que del código, y el software no puede
     suplirlo.
+
+14. **Grabador guiado y segundo plano**
+    ([§2.5.2](#252-añadido-en-la-v2-grabador-guiado-y-segundo-plano)). El plan
+    dejaba las condiciones de grabación como recomendaciones escritas; ahora el
+    programa las impone con temporizador y señales en pantalla. Más el guion
+    fonético en `docs/GUION-GRABACION.md`.
 
 13. **Cadena de efectos y UI por pestañas**
     ([§2.5.1](#251-añadido-en-la-v2-efectos-sobre-la-salida)). La v1 no

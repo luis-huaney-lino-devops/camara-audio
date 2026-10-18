@@ -233,6 +233,22 @@ class OutputConfig:
 
 
 @dataclass
+class UiConfig:
+    """Comportamiento de la ventana."""
+
+    minimize_to_tray: bool = True
+    """Al cerrar la ventana, seguir en el area de notificacion en vez de salir.
+
+    Quita la ventana de la barra de tareas y de Alt+Tab, pero NO oculta la
+    aplicacion del sistema: sigue en el Administrador de tareas, en el propio
+    icono junto al reloj, y en la lista de camaras del programa de videollamada.
+    Es minimizacion a bandeja estandar, no evasion."""
+
+    record_duration_s: float = 15.0
+    """Duracion por defecto en el grabador guiado."""
+
+
+@dataclass
 class MetricsConfig:
     enabled: bool = False
     interval_s: float = 2.0
@@ -248,6 +264,7 @@ class AppConfig:
     video: VideoConfig = field(default_factory=VideoConfig)
     effects: EffectsConfig = field(default_factory=EffectsConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    ui: UiConfig = field(default_factory=UiConfig)
     metrics: MetricsConfig = field(default_factory=MetricsConfig)
 
     # ------------------------------------------------------------------ #
@@ -354,6 +371,9 @@ class AppConfig:
         if o.reopen_attempts < 0:
             errs.append("Los reintentos de reapertura no pueden ser negativos.")
 
+        if not 4.0 <= self.ui.record_duration_s <= 60.0:
+            errs.append("La duracion de grabacion debe estar entre 4 y 60 s.")
+
         e = self.effects
         if not 1.0 <= e.zoom <= 4.0:
             errs.append("El zoom debe estar entre 1.0 y 4.0.")
@@ -450,6 +470,7 @@ _SECTIONS: dict[str, type] = {
     "video": VideoConfig,
     "effects": EffectsConfig,
     "output": OutputConfig,
+    "ui": UiConfig,
     "metrics": MetricsConfig,
 }
 

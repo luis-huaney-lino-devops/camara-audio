@@ -51,9 +51,36 @@ def test_la_ventana_se_construye(window):
     assert window.windowTitle()
 
 
-def test_estan_las_cinco_pestanas(window):
+def test_estan_todas_las_pestanas(window):
     nombres = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert nombres == ["Videos", "Micrófono", "Detector", "Efectos", "Salida"]
+    assert nombres == [
+        "Videos", "Grabar", "Micrófono", "Detector", "Efectos", "Salida",
+    ]
+
+
+def test_un_clip_grabado_se_asigna_a_la_configuracion(window, tmp_path):
+    """La pestaña Grabar entrega el archivo y debe quedar seleccionado."""
+    hablando = tmp_path / "hablando.mp4"
+    silencio = tmp_path / "silencio.mp4"
+    hablando.write_bytes(b"x")
+    silencio.write_bytes(b"x")
+
+    window._on_clip_recorded("speaking", str(hablando))
+    assert window.cfg.video.speaking_clip == str(hablando)
+    assert window.tabs.currentIndex() == 0, "debe volver a la pestaña Videos"
+
+    window._on_clip_recorded("silent", str(silencio))
+    assert window.cfg.video.silent_clip == str(silencio)
+
+
+def test_la_preferencia_de_bandeja_va_y_vuelve(window, tmp_path):
+    window.tray_check.setChecked(False)
+    window._on_save()
+    assert not AppConfig.load(tmp_path / "config.json").ui.minimize_to_tray
+
+    window.tray_check.setChecked(True)
+    window._on_save()
+    assert AppConfig.load(tmp_path / "config.json").ui.minimize_to_tray
 
 
 def test_hay_mas_de_una_resolucion_y_cadencia(window):

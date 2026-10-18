@@ -48,6 +48,8 @@ from ..audio.capture import AudioError, DeviceInfo, list_input_devices
 from ..config import AppConfig, EffectsConfig
 from ..controller import Session, SessionError
 from ..video.cache import ClipCacheError, probe_clip
+from .recorder_tab import RecorderTab
+from .tray import TrayController, tray_available
 from .widgets import (
     STYLESHEET,
     Card,
@@ -139,6 +141,8 @@ class MainWindow(QMainWindow):
         self._worker: PrepareWorker | None = None
         self._loading = True
         self._last_message = ""
+        self.tray: TrayController | None = None
+        self._really_quit = False
 
         self.setWindowTitle("Cámara virtual por voz")
         self.resize(1180, 780)
@@ -151,6 +155,7 @@ class MainWindow(QMainWindow):
         self._loading = False
         self._update_clip_info()
         self._set_running(False)
+        self._setup_tray()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
@@ -246,7 +251,9 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         self.tabs = QTabWidget()
+        self.recorder_tab = RecorderTab(self._on_clip_recorded)
         self.tabs.addTab(self._scrollable(self._tab_clips()), "Videos")
+        self.tabs.addTab(self._scrollable(self.recorder_tab), "Grabar")
         self.tabs.addTab(self._scrollable(self._tab_audio()), "Micrófono")
         self.tabs.addTab(self._scrollable(self._tab_detector()), "Detector")
         self.tabs.addTab(self._scrollable(self._tab_effects()), "Efectos")
@@ -655,8 +662,82 @@ class MainWindow(QMainWindow):
         fila.addWidget(listar)
         camara.add_layout(fila)
         layout.addWidget(camara)
+
+        fondo = Card("segundo plano")
+        self.tray_check = QCheckBox("Al cerrar la ventana, seguir en el área de notificación")
+        self.tray_check.setToolTip(
+            "La aplicación sigue funcionando con un icono junto al reloj, que "
+            "cambia de color según el estado del detector."
+        )
+        self.tray_check.stateChanged.connect(self._on_tray_toggled)
+        fondo.add(self.tray_check)
+
+        aviso_bandeja = QLabel(
+            "Quita la ventana de la barra de tareas y de Alt+Tab. <b>No oculta "
+            "la aplicación del sistema</b>: sigue estando en el Administrador de "
+            "tareas, en el propio icono del área de notificación y en la lista "
+            "de cámaras del programa de videollamada, donde aparece «CamVoice "
+            "Virtual Camera»."
+        )
+        aviso_bandeja.setWordWrap(True)
+        aviso_bandeja.setObjectName("dim")
+        aviso_bandeja.setStyleSheet("color:#8b949e; font-size:11px;")
+        fondo.add(aviso_bandeja)
+        layout.addWidget(fondo)
+
         layout.addStretch(1)
         return pagina
+
+    # ------------------------------------------------------------------ #
+    # Bandeja del sistema
+    # ------------------------------------------------------------------ #
+
+    def _setup_tray(self) -> None:
+        if not tray_available():
+            self.tray_check.setEnabled(False)
+            self.tray_check.setToolTip(
+                "Este escritorio no ofrece área de notificación."
+            )
+            return
+        self.tray = TrayController(
+            on_show=self._restore_from_tray,
+            on_start=self._on_start,
+            on_stop=self._on_stop,
+            on_quit=self._quit_from_tray,
+            parent=self,
+        )
+        self.tray.show()
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_from_tray(self) -> None:
+        self._really_quit = True
+        self.close()
+
+    def _on_tray_toggled(self) -> None:
+        if self._loading:
+            return
+        self.cfg.ui.minimize_to_tray = self.tray_check.isChecked()
+
+    # ------------------------------------------------------------------ #
+    # Grabación
+    # ------------------------------------------------------------------ #
+
+    def _on_clip_recorded(self, kind: str, ruta: str) -> None:
+        """La pestaña Grabar acaba de producir un clip utilizable."""
+        if kind == "speaking":
+            self.cfg.video.speaking_clip = ruta
+            self.speaking_path.setText(ruta)
+        else:
+            self.cfg.video.silent_clip = ruta
+            self.silent_path.setText(ruta)
+        self._update_clip_info()
+        self._update_cache_info()
+        self.tabs.setCurrentIndex(0)
+        self.statusBar().showMessage(f"Clip asignado: {ruta}", 6000)
 
     # ------------------------------------------------------------------ #
     # Carga y guardado
@@ -714,6 +795,7 @@ class MainWindow(QMainWindow):
         self.release.set_silently(d.release_ms)
         self.pause_tol.set_silently(d.pause_tolerance_ms)
 
+        self.tray_check.setChecked(self.cfg.ui.minimize_to_tray)
         self.effects_enabled.setChecked(e.enabled)
         self._load_effects_into_widgets(e)
         self._update_cache_info()
@@ -744,6 +826,7 @@ class MainWindow(QMainWindow):
         v.transition_ms = int(self.transition.value())
         v.resume_window_ms = int(self.resume_window.value())
         o.enabled = self.virtual_check.isChecked()
+        self.cfg.ui.minimize_to_tray = self.tray_check.isChecked()
         self.cfg.audio.device = self.mic_combo.currentData()
         self.cfg.audio.device_name = next(
             (d.name for d in self._devices if d.index == self.cfg.audio.device), ""
@@ -1074,6 +1157,16 @@ class MainWindow(QMainWindow):
         else:
             self.metrics_label.setText("—")
 
+        if self.tray is not None:
+            detalle = (
+                f"{render.fps_effective:.1f} FPS · {render.sink_device}"
+                if render.running and render.virtual_output
+                else ""
+            )
+            self.tray.update_state(
+                render.state.value, running=render.running, detail=detalle
+            )
+
         mensaje = render.error or voz.hint or render.warning
         if mensaje:
             self._show_message(mensaje, "err" if (render.error or voz.error) else "warn")
@@ -1119,10 +1212,30 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802
+        # Con la bandeja activa, cerrar la ventana esconde pero no termina: la
+        # sesión sigue alimentando la cámara virtual. Para salir de verdad hay
+        # que usar «Salir» en el menú del icono.
+        if (
+            not self._really_quit
+            and self.tray is not None
+            and self.cfg.ui.minimize_to_tray
+        ):
+            event.ignore()
+            self.hide()
+            self.tray.notify(
+                "Sigue funcionando en segundo plano",
+                "La cámara virtual continúa activa. Usa el icono junto al reloj "
+                "para volver o para salir.",
+            )
+            return
+
         self.timer.stop()
+        self.recorder_tab.shutdown()
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait(2000)
+        if self.tray is not None:
+            self.tray.hide()
         self.session.close()
         super().closeEvent(event)
 

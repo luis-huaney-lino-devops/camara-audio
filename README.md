@@ -50,6 +50,37 @@ clic en `INSTALAR.bat` y luego en `PROBAR.bat`.
 Aparece como **«CamVoice Virtual Camera»** en Teams, Zoom, Meet y el navegador.
 **No hace falta OBS.** Detalles en [docs/CAMARA-VIRTUAL.md](docs/CAMARA-VIRTUAL.md).
 
+## Grabar los clips desde la propia aplicación
+
+Pestaña **Grabar**: elige la cámara, la duración y si es el clip hablando o el
+de silencio. Muestra guías de encuadre, cuenta atrás, y las señales del guion en
+pantalla mientras graba. **Para sola** al cumplirse el tiempo.
+
+```
+ 0.0 - 0.6 s   BOCA CERRADA, mira al objetivo
+ 0.6 - 13.5 s  Lee en voz alta  (trae el texto en pantalla)
+13.5 - 15.0 s  Termina la frase y CIERRA LA BOCA
+```
+
+El medio segundo inicial no es decorativo: es el fotograma al que se rebobina el
+clip de habla tras cada silencio. Si ahí tienes la boca a medio abrir, cada vez
+que empieces a hablar la cara aparecerá con una mueca.
+
+El guion completo —qué decir, qué no hacer, por qué el clip de silencio se
+reproduce la mitad del tiempo hacia atrás— está en
+[docs/GUION-GRABACION.md](docs/GUION-GRABACION.md).
+
+## Segundo plano
+
+Casilla en la pestaña **Salida**: al cerrar la ventana, la aplicación sigue en
+el área de notificación con un icono que **cambia de color según el estado**
+del detector. Doble clic para volver, «Salir» en su menú para terminar.
+
+Quita la ventana de la barra de tareas y de Alt+Tab. **No oculta la aplicación
+del sistema**: sigue en el Administrador de tareas, en el propio icono junto al
+reloj, y en la lista de cámaras del programa de videollamada, donde aparece
+«CamVoice Virtual Camera».
+
 ## Efectos
 
 Sobre el fotograma de salida, ajustables en vivo desde la pestaña **Efectos** o
@@ -153,7 +184,7 @@ repetirlo en el Core i5 de referencia y durante 30 minutos.
 ## Pruebas
 
 ```bash
-pytest          # 233 pruebas, ~16 s, sin micrófono ni cámara
+pytest          # 284 pruebas, ~18 s, sin micrófono ni cámara
 ```
 
 Procedimiento completo, incluidas las pruebas manuales, en
@@ -175,6 +206,7 @@ sincronización. Límites completos en [plan.md](plan.md) §5.
 |---|---|
 | [plan.md](plan.md) | Especificación, criterios de aceptación y estado |
 | [docs/ARQUITECTURA.md](docs/ARQUITECTURA.md) | Diseño y decisiones técnicas |
+| [docs/GUION-GRABACION.md](docs/GUION-GRABACION.md) | **Cómo grabar los dos clips: tiempos, qué decir, qué no hacer** |
 | [docs/REQUISITOS.md](docs/REQUISITOS.md) | **Qué hace falta para probarlo en una máquina nueva** |
 | [instalacion/00-LEEME.md](instalacion/00-LEEME.md) | **Scripts de instalación rápida y orden de ejecución** |
 | [docs/CAMARA-VIRTUAL.md](docs/CAMARA-VIRTUAL.md) | La cámara virtual, independiente de OBS |

@@ -12,7 +12,7 @@ actual está en `plan.md` §8 y los resultados de rendimiento en `METRICS.md`.
 ## 1. Pruebas automatizadas
 
 ```
-pytest                    # 233 pruebas, ~16 s
+pytest                    # 284 pruebas, ~18 s
 pytest -v                 # con el nombre de cada caso
 pytest tests/test_gate.py # solo la histéresis
 ```
@@ -35,6 +35,7 @@ fallar; el resto sigue cubriendo el detector de energía.
 | `test_cli.py` | Punto de entrada, subcomandos, recorrido completo como proceso | CA-03, CA-13 |
 | `test_effects.py` | Cada efecto, independencia de la resolución, rangos, coste | CA-09, CA-10 |
 | `test_ui.py` | Ventana, pestañas, los controles escriben en la configuración, bloqueo en caliente | CA-10, CA-11 |
+| `test_record.py` | Guion sin huecos, mezcla de sonidos del texto, cadencia escrita, detección de cámaras virtuales | CA-03, CA-11 |
 
 ### Las dos pruebas que conviene conocer
 
@@ -122,6 +123,39 @@ y calla varias veces durante dos minutos y comprueba:
       entero».
 
 ---
+
+## 4.5. Grabador guiado
+
+Requiere una webcam.
+
+1. Pestaña **Grabar** → **Buscar**. Debe listar tus cámaras físicas y **no**
+   «CamVoice Virtual Camera».
+2. Elige clip HABLANDO, 15 s, y pulsa **Grabar**.
+3. Comprueba:
+   - [ ] Aparecen las guías de encuadre (eje central, línea de ojos, marco).
+   - [ ] Cuenta atrás de 3 s con la señal «BOCA CERRADA» destacada.
+   - [ ] Las señales cambian en los tiempos del guion.
+   - [ ] **Para sola** a los 15 s.
+   - [ ] El archivo resultante **dura 15 s al reproducirlo**, no menos. Si dura
+         menos, la cadencia escrita no coincide con la real.
+   - [ ] Ofrece usarlo como clip y al aceptar queda seleccionado.
+4. Repite con el clip EN SILENCIO y comprueba que el guion es distinto.
+
+Si la cámara entrega menos de 20 FPS reales, el aviso lo indica: suele ser falta
+de luz, no un fallo.
+
+## 4.6. Bandeja del sistema
+
+1. En **Salida**, marca «seguir en el área de notificación».
+2. Inicia la sesión y **cierra la ventana** con la X.
+3. Comprueba:
+   - [ ] La ventana desaparece de la barra de tareas y de Alt+Tab.
+   - [ ] Aparece un globo avisando de que sigue funcionando.
+   - [ ] El icono junto al reloj **cambia de color** al hablar.
+   - [ ] La cámara virtual **sigue emitiendo** (compruébalo en el navegador).
+   - [ ] Doble clic en el icono devuelve la ventana.
+   - [ ] «Salir» en el menú del icono termina el proceso de verdad.
+4. Desmarca la casilla y comprueba que entonces la X cierra la aplicación.
 
 ## 5. Cámara virtual (CA-07)
 

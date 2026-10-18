@@ -319,6 +319,54 @@ librería la haya bajado.
 mensajes accionables (no instalada / en uso por otra aplicación) y reabre con
 espera creciente.
 
+## 4.8. Grabación guiada
+
+`record.py`. El guion es **datos, no código**: `RecordingPlan` describe las
+señales con sus tiempos y la interfaz solo pregunta «¿qué toca en el segundo
+t?». Así el guion completo se verifica sin cámara, incluido que las señales
+cubran todo el clip sin huecos.
+
+Existe para que las condiciones que de verdad importan las imponga el programa
+en vez de confiar en que el usuario recuerde un documento: el medio segundo
+inicial con la boca cerrada, la duración en el rango útil y el cierre de boca
+al final.
+
+### Dos problemas que solo aparecieron al probarlo con una cámara real
+
+**La cadencia declarada miente.** Una webcam que anuncia 30 FPS entregaba 10 con
+poca luz: baja la cadencia para exponer más tiempo. Escribiendo 30 en la
+cabecera del archivo, un clip de 5 s quedaba de 1,7 s y se reproducía al triple
+de velocidad, con la boca moviéndose de forma absurda. Y el problema se
+arrastraba: el paso de preparación remuestrea usando los FPS **declarados** en
+el archivo. Ahora la cadencia se **mide durante la cuenta atrás** y es la medida
+la que se escribe.
+
+**Nuestra propia cámara virtual aparecía como fuente de grabación.** El camino
+obvio —cruzar el índice de OpenCV con el nombre del registro de Windows— no
+funciona: la clave `Instance` del registro contiene solo los filtros
+**software**, no las webcams físicas, así que el emparejamiento por posición
+mezclaba unas con otras. Una webcam real salía etiquetada como «Cámara 3» y una
+virtual podría haberse ofrecido, creando un bucle.
+
+La solución no depende de nombres: se leen **dos fotogramas separados 250 ms** y
+se comparan bit a bit. Una cámara virtual sin productor emite un fotograma de
+relleno congelado; **un sensor real nunca entrega dos fotogramas idénticos**,
+porque siempre hay ruido de lectura. Es un discriminador exacto, sin umbral que
+ajustar.
+
+## 4.9. Bandeja del sistema
+
+`ui/tray.py`. El icono se **dibuja en código** y no se empaqueta un archivo,
+porque así el icono *es* el indicador de estado: cambia de color con
+SILENT/SPEAKING/TRANSITION y no hay cuatro PNG que mantener sincronizados con la
+lógica.
+
+Con `ui.minimize_to_tray`, cerrar la ventana la esconde en vez de terminar: la
+sesión sigue alimentando la cámara virtual. Es minimización a bandeja estándar,
+**no evasión**: el proceso sigue en el Administrador de tareas, el icono sigue
+junto al reloj, y el nombre «CamVoice Virtual Camera» sigue en la lista de
+cámaras del programa de videollamada.
+
 ## 5. Política ante errores
 
 El principio es que **nada que falle debe detener la salida de video**. En una
@@ -357,6 +405,7 @@ que usan las pruebas para no tocar la instalación real):
 | `metrics.py` | `PerfMonitor`: muestreo, CSV, percentiles, pendiente de memoria |
 | `cli.py` | `doctor`, `devices`, `probe`, `prepare`, `run`, `bench`, `vad-test`, `make-clips`, `config`, `clean`, `gui` |
 | `testclips.py` | Generador de clips sintéticos |
+| `record.py` | Guion de grabación (datos), grabador, detección de cámaras |
 | `audio/capture.py` | PortAudio, negociación, cola acotada, resolución de dispositivo |
 | `audio/resample.py` | FIR + interpolación con estado, mezcla a mono, dBFS |
 | `audio/vad.py` | `EnergyDetector`, `WebrtcDetector`, fábrica |
@@ -370,3 +419,5 @@ que usan las pruebas para no tocar la instalación real):
 | `output/sink.py` | `VirtualCamSink`, `NullSink`, diagnóstico |
 | `ui/app.py` | Ventana PySide6 con pestañas |
 | `ui/widgets.py` | Widgets reutilizables y hoja de estilo |
+| `ui/recorder_tab.py` | Pestaña de grabación guiada |
+| `ui/tray.py` | Icono de bandeja con estado |
